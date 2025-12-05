@@ -16,15 +16,37 @@ var globalSSHKeyPath string
 // This should be called once at startup from the root command
 func SetSSHKeyPath(cmd *cobra.Command) {
 	// Priority: flag value > environment variable > empty string
-	if cmd != nil {
-		if sshKey, err := cmd.Flags().GetString("ssh-key"); err == nil && sshKey != "" {
-			globalSSHKeyPath = sshKey
-			return
-		}
+	if sshKey, err := cmd.Flags().GetString("ssh-key"); err == nil && sshKey != "" {
+		globalSSHKeyPath = sshKey
+		printSSHKeyInfo(cmd, "flag", sshKey)
+		return
 	}
 
 	// Fall back to environment variable
-	globalSSHKeyPath = os.Getenv("SKILLS_SSH_KEY")
+	envKey := os.Getenv("SKILLS_SSH_KEY")
+	if envKey != "" {
+		globalSSHKeyPath = envKey
+		printSSHKeyInfo(cmd, "environment variable", envKey)
+	}
+}
+
+// printSSHKeyInfo prints a safe indication that an SSH key was loaded
+func printSSHKeyInfo(cmd *cobra.Command, source string, keyPathOrContent string) {
+	keyPathOrContent = strings.TrimSpace(keyPathOrContent)
+
+	var msg string
+	if strings.HasPrefix(keyPathOrContent, "-----BEGIN") {
+		// It's key content - show first line and length
+		lines := strings.Split(keyPathOrContent, "\n")
+		firstLine := strings.TrimSpace(lines[0])
+		msg = fmt.Sprintf("SSH key loaded from %s (inline content, %d bytes, type: %s)\n",
+			source, len(keyPathOrContent), firstLine)
+	} else {
+		// It's a file path - show the path
+		msg = fmt.Sprintf("SSH key loaded from %s: %s\n", source, keyPathOrContent)
+	}
+
+	cmd.PrintErr(msg)
 }
 
 // GetSSHKeyPath returns the global SSH key path

@@ -100,15 +100,21 @@ func buildSSHCommand(keyPathOrContent string) string {
 			return ""
 		}
 
+		// Ensure the key content ends with a newline (SSH keys must end with newline)
+		keyContent := strings.TrimSpace(keyPathOrContent)
+		if !strings.HasSuffix(keyContent, "\n") {
+			keyContent += "\n"
+		}
+
 		// Write the key content
-		if _, err := tmpFile.WriteString(keyPathOrContent); err != nil {
+		if _, err := tmpFile.WriteString(keyContent); err != nil {
 			tmpFile.Close()
 			os.Remove(tmpFile.Name())
 			fmt.Fprintf(os.Stderr, "Warning: failed to write SSH key to temp file: %v\n", err)
 			return ""
 		}
 
-		// Set proper permissions
+		// Set proper permissions BEFORE closing (important for some systems)
 		if err := tmpFile.Chmod(0600); err != nil {
 			tmpFile.Close()
 			os.Remove(tmpFile.Name())
