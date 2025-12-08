@@ -4,7 +4,7 @@ A CLI tool for managing Sleuth skills - reusable units of AI agent behavior.
 
 ## Prerequisites
 
-Go 1.22.2 or later is required. Install using [gvm](https://github.com/moovweb/gvm):
+Go 1.25 or later is required. Install using [gvm](https://github.com/moovweb/gvm):
 
 ```bash
 # Install gvm
@@ -14,8 +14,8 @@ bash < <(curl -s -S -L https://raw.githubusercontent.com/moovweb/gvm/master/bins
 gvm install go1.4 -B
 gvm use go1.4
 export GOROOT_BOOTSTRAP=$GOROOT
-gvm install go1.23.4
-gvm use go1.23.4 --default
+gvm install go1.25
+gvm use go1.25 --default
 ```
 
 ## Installation

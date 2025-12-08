@@ -13,7 +13,7 @@ make lint           # Run linter
 
 ## Tech Stack
 
-- Go 1.22+
+- Go 1.25+
 - cobra (CLI framework)
 - TOML (config format)
 
