@@ -43,7 +43,8 @@ func EnsureDir(path string) error {
 	return os.MkdirAll(path, 0755)
 }
 
-// GetClaudeDir returns the path to the .claude directory
+// GetClaudeDir returns the path to the .claude directory for artifact installation
+// This is where global artifacts are installed
 func GetClaudeDir() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -53,12 +54,23 @@ func GetClaudeDir() (string, error) {
 }
 
 // GetConfigDir returns the path to the skills config directory
+// Uses platform-specific config directories:
+// - Linux: ~/.config/skills (or $XDG_CONFIG_HOME/skills)
+// - macOS: ~/Library/Application Support/skills
+// - Windows: %AppData%/skills
 func GetConfigDir() (string, error) {
-	claudeDir, err := GetClaudeDir()
-	if err != nil {
-		return "", err
+	// Check for environment override
+	if configDir := os.Getenv("SKILLS_CONFIG_DIR"); configDir != "" {
+		return configDir, nil
 	}
-	return filepath.Join(claudeDir, "plugins", "skills"), nil
+
+	// Use os.UserConfigDir() for platform-specific config directory
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to determine config directory: %w", err)
+	}
+
+	return filepath.Join(configDir, "skills"), nil
 }
 
 // GetConfigFile returns the path to the config.json file

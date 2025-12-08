@@ -245,6 +245,25 @@ func LoadLockFile(repoURL string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+// GetTrackerCacheDir returns the directory for tracking installed artifacts state
+func GetTrackerCacheDir() (string, error) {
+	cacheDir, err := GetCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cacheDir, "installed-state"), nil
+}
+
+// GetTrackerCachePath returns the path for tracking installed artifacts
+// scopeKey should be "global" or a hash/identifier for repo-scoped installs
+func GetTrackerCachePath(scopeKey string) (string, error) {
+	trackerDir, err := GetTrackerCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(trackerDir, scopeKey+".json"), nil
+}
+
 // SaveArtifactToDisk caches an artifact zip to disk
 func SaveArtifactToDisk(name, version string, data []byte) error {
 	cachePath, err := GetArtifactCachePath(name, version)

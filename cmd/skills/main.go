@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/sleuth-io/skills/internal/autoupdate"
 	"github.com/sleuth-io/skills/internal/buildinfo"
 	"github.com/sleuth-io/skills/internal/commands"
 	"github.com/sleuth-io/skills/internal/git"
@@ -11,6 +12,9 @@ import (
 )
 
 func main() {
+	// Check for updates in the background (non-blocking, once per day)
+	autoupdate.CheckAndUpdateInBackground()
+
 	rootCmd := &cobra.Command{
 		Use:   "skills",
 		Short: "Skills CLI - Provision AI artifacts from remote servers or Git repositories",
@@ -41,6 +45,7 @@ from remote Sleuth servers or Git repositories.`,
 	rootCmd.AddCommand(commands.NewLockCommand())
 	rootCmd.AddCommand(commands.NewAddCommand())
 	rootCmd.AddCommand(commands.NewUpdateTemplatesCommand())
+	rootCmd.AddCommand(commands.NewUpdateCommand())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

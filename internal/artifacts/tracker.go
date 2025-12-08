@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/sleuth-io/skills/internal/cache"
 	"github.com/sleuth-io/skills/internal/lockfile"
 	"github.com/sleuth-io/skills/internal/utils"
 )
@@ -31,8 +32,30 @@ type InstalledArtifact struct {
 }
 
 // GetTrackerPath returns the path to the installed artifacts tracker
+// Now stored in cache directory instead of alongside installed artifacts
 func GetTrackerPath(targetBase string) string {
-	return filepath.Join(targetBase, ".skills-installed.json")
+	// Generate a scope key from the targetBase path
+	// For global (~/.claude), use "global"
+	// For repo-scoped, use a hash of the repo path
+	scopeKey := "global"
+	if !filepath.IsAbs(targetBase) || !filepath.HasPrefix(targetBase, os.Getenv("HOME")) {
+		// This is a repo-scoped path, hash it
+		scopeKey = utils.URLHash(targetBase)
+	} else if homeDir, err := os.UserHomeDir(); err == nil {
+		claudeDir := filepath.Join(homeDir, ".claude")
+		if targetBase != claudeDir {
+			// Not the global claude dir, must be repo-scoped
+			scopeKey = utils.URLHash(targetBase)
+		}
+	}
+
+	// Get tracker path from cache
+	trackerPath, err := cache.GetTrackerCachePath(scopeKey)
+	if err != nil {
+		// Fallback to old behavior if cache path fails
+		return filepath.Join(targetBase, ".skills-installed.json")
+	}
+	return trackerPath
 }
 
 // LoadInstalledArtifacts loads the tracker file

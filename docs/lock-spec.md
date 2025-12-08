@@ -212,7 +212,7 @@ hashes = {sha256 = "..."}
 # No repositories = global
 ```
 
-Installation: `~/.claude/plugins/sleuth-global-artifacts/`
+Installation: `~/.claude/skills/global-skill/`
 
 ### Repository Scope
 

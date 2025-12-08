@@ -32,28 +32,55 @@ type Config struct {
 	RepositoryURL string `json:"repositoryUrl,omitempty"`
 }
 
+// getLegacyConfigFile returns the old config file path for backwards compatibility
+func getLegacyConfigFile() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(homeDir, ".claude", "plugins", "skills", "config.json"), nil
+}
+
 // Load loads the configuration from the config file
+// Falls back to the old location (~/.claude/plugins/skills/config.json) for backwards compatibility
 func Load() (*Config, error) {
 	configFile, err := utils.GetConfigFile()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get config file path: %w", err)
 	}
 
-	if !utils.FileExists(configFile) {
-		return nil, fmt.Errorf("configuration not found. Run 'skills init' first")
+	// Try new location first
+	if utils.FileExists(configFile) {
+		data, err := os.ReadFile(configFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read config file: %w", err)
+		}
+
+		var cfg Config
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return nil, fmt.Errorf("failed to parse config file: %w", err)
+		}
+
+		return &cfg, nil
 	}
 
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+	// Fallback to legacy location
+	legacyConfigFile, err := getLegacyConfigFile()
+	if err == nil && utils.FileExists(legacyConfigFile) {
+		data, err := os.ReadFile(legacyConfigFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read legacy config file: %w", err)
+		}
+
+		var cfg Config
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return nil, fmt.Errorf("failed to parse legacy config file: %w", err)
+		}
+
+		return &cfg, nil
 	}
 
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse config file: %w", err)
-	}
-
-	return &cfg, nil
+	return nil, fmt.Errorf("configuration not found. Run 'skills init' first")
 }
 
 // Save saves the configuration to the config file
