@@ -233,12 +233,10 @@ func addNewArtifact(ctx context.Context, out *outputHelper, repo repository.Repo
 	// Create full metadata with confirmed version
 	meta := createMetadata(name, version, artifactType, zipFile, zipData)
 
-	// Add metadata to zip if needed
-	if !metadataExists {
-		zipData, err = addMetadataToZip(meta, zipData)
-		if err != nil {
-			return err
-		}
+	// Always update metadata.toml to ensure version is correct
+	zipData, err = updateMetadataInZip(meta, zipData, metadataExists)
+	if err != nil {
+		return err
 	}
 
 	// Create artifact entry (what it is)
@@ -443,18 +441,27 @@ func createMetadata(name, version, artifactType, zipFile string, zipData []byte)
 	return meta
 }
 
-// addMetadataToZip marshals and adds metadata to the zip
-func addMetadataToZip(meta *metadata.Metadata, zipData []byte) ([]byte, error) {
+// updateMetadataInZip updates or adds metadata.toml in the zip with the correct version
+func updateMetadataInZip(meta *metadata.Metadata, zipData []byte, metadataExists bool) ([]byte, error) {
 	metadataBytes, err := metadata.Marshal(meta)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal metadata: %w", err)
 	}
 
+	if metadataExists {
+		// Replace existing metadata.toml in zip
+		newZipData, err := utils.ReplaceFileInZip(zipData, "metadata.toml", metadataBytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to replace metadata in zip: %w", err)
+		}
+		return newZipData, nil
+	}
+
+	// Add new metadata.toml to zip
 	newZipData, err := utils.AddFileToZip(zipData, "metadata.toml", metadataBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add metadata to zip: %w", err)
 	}
-
 	return newZipData, nil
 }
 

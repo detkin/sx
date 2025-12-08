@@ -59,7 +59,7 @@ func (s *SleuthRepository) Authenticate(ctx context.Context) (string, error) {
 
 // GetLockFile retrieves the lock file from the Sleuth server
 func (s *SleuthRepository) GetLockFile(ctx context.Context, cachedETag string) (content []byte, etag string, notModified bool, err error) {
-	endpoint := s.serverURL + "/api/skills/lock"
+	endpoint := s.serverURL + "/api/skills/skill.lock"
 
 	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {

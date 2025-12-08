@@ -336,3 +336,49 @@ func (h *HookHandler) buildHookConfig() map[string]interface{} {
 
 	return config
 }
+
+// CanDetectInstalledState returns true since hooks preserve metadata.toml
+func (h *HookHandler) CanDetectInstalledState() bool {
+	return true
+}
+
+// ScanInstalled scans for installed hook artifacts in the target directory
+func (h *HookHandler) ScanInstalled(targetBase string) ([]InstalledArtifactInfo, error) {
+	var artifacts []InstalledArtifactInfo
+
+	hooksPath := filepath.Join(targetBase, "hooks")
+	if !utils.IsDirectory(hooksPath) {
+		return artifacts, nil
+	}
+
+	dirs, err := os.ReadDir(hooksPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read hooks directory: %w", err)
+	}
+
+	for _, dir := range dirs {
+		if !dir.IsDir() {
+			continue
+		}
+
+		metaPath := filepath.Join(hooksPath, dir.Name(), "metadata.toml")
+		meta, err := metadata.ParseFile(metaPath)
+		if err != nil {
+			continue // Skip if can't parse
+		}
+
+		// Only include if it's actually a hook
+		if meta.Artifact.Type != "hook" {
+			continue
+		}
+
+		artifacts = append(artifacts, InstalledArtifactInfo{
+			Name:        meta.Artifact.Name,
+			Version:     meta.Artifact.Version,
+			Type:        meta.Artifact.Type,
+			InstallPath: filepath.Join("hooks", dir.Name()),
+		})
+	}
+
+	return artifacts, nil
+}

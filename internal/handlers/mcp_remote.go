@@ -211,3 +211,13 @@ func (h *MCPRemoteHandler) buildMCPServerConfig() map[string]interface{} {
 
 	return config
 }
+
+// CanDetectInstalledState returns false since mcp-remote doesn't preserve metadata.toml
+func (h *MCPRemoteHandler) CanDetectInstalledState() bool {
+	return false
+}
+
+// ScanInstalled returns empty since mcp-remote cannot be detected from filesystem
+func (h *MCPRemoteHandler) ScanInstalled(targetBase string) ([]InstalledArtifactInfo, error) {
+	return nil, nil
+}

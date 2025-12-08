@@ -173,6 +173,52 @@ func (h *SkillHandler) Validate(zipData []byte) error {
 	return nil
 }
 
+// CanDetectInstalledState returns true since skills preserve metadata.toml
+func (h *SkillHandler) CanDetectInstalledState() bool {
+	return true
+}
+
+// ScanInstalled scans for installed skill artifacts in the target directory
+func (h *SkillHandler) ScanInstalled(targetBase string) ([]InstalledArtifactInfo, error) {
+	var artifacts []InstalledArtifactInfo
+
+	skillsPath := filepath.Join(targetBase, "skills")
+	if !utils.IsDirectory(skillsPath) {
+		return artifacts, nil
+	}
+
+	dirs, err := os.ReadDir(skillsPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read skills directory: %w", err)
+	}
+
+	for _, dir := range dirs {
+		if !dir.IsDir() {
+			continue
+		}
+
+		metaPath := filepath.Join(skillsPath, dir.Name(), "metadata.toml")
+		meta, err := metadata.ParseFile(metaPath)
+		if err != nil {
+			continue // Skip if can't parse
+		}
+
+		// Only include if it's actually a skill (not agent which also uses skills/ dir)
+		if meta.Artifact.Type != "skill" {
+			continue
+		}
+
+		artifacts = append(artifacts, InstalledArtifactInfo{
+			Name:        meta.Artifact.Name,
+			Version:     meta.Artifact.Version,
+			Type:        meta.Artifact.Type,
+			InstallPath: filepath.Join("skills", dir.Name()),
+		})
+	}
+
+	return artifacts, nil
+}
+
 // containsFile checks if a file exists in the file list
 func containsFile(files []string, filename string) bool {
 	for _, f := range files {

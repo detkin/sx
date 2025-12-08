@@ -19,10 +19,18 @@ build: ## Build the binary
 	@go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN_PATH)
 	@echo "Built: $(BUILD_DIR)/$(BINARY_NAME)"
 
-install: ## Install binary to $GOPATH/bin
+install: build ## Install binary to ~/.local/bin
 	@echo "Installing $(BINARY_NAME)..."
-	@go install $(LDFLAGS) $(MAIN_PATH)
-	@echo "Installed to: $$(go env GOPATH)/bin/$(BINARY_NAME)"
+	@mkdir -p $$HOME/.local/bin
+	@cp $(BUILD_DIR)/$(BINARY_NAME) $$HOME/.local/bin/
+	@echo "✓ $(BINARY_NAME) installed to $$HOME/.local/bin/$(BINARY_NAME)"
+	@case ":$$PATH:" in \
+		*":$$HOME/.local/bin:"*) ;; \
+		*) echo ""; \
+		   echo "⚠ Warning: $$HOME/.local/bin is not in your PATH"; \
+		   echo "Add this to your ~/.bashrc or ~/.zshrc:"; \
+		   echo "  export PATH=\"\$$PATH:$$HOME/.local/bin\"" ;; \
+	esac
 
 test: ## Run tests
 	@echo "Running tests..."

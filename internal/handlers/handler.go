@@ -47,6 +47,25 @@ type MetadataHelper interface {
 	ValidateMetadata(meta *metadata.Metadata) error
 }
 
+// InstalledStateDetector provides methods to detect installed artifacts from the filesystem
+type InstalledStateDetector interface {
+	// CanDetectInstalledState returns true if this handler can read
+	// version info from filesystem (metadata.toml is preserved)
+	CanDetectInstalledState() bool
+
+	// ScanInstalled scans targetBase for installed artifacts of this type
+	// Returns slice of found artifacts with name, version, type, path
+	ScanInstalled(targetBase string) ([]InstalledArtifactInfo, error)
+}
+
+// InstalledArtifactInfo represents information about an installed artifact
+type InstalledArtifactInfo struct {
+	Name        string
+	Version     string
+	Type        string
+	InstallPath string
+}
+
 // NewHandler creates an appropriate handler for the given artifact type
 func NewHandler(meta *metadata.Metadata) (ArtifactHandler, error) {
 	switch meta.Artifact.Type {

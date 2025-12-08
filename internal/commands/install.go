@@ -173,10 +173,41 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	out.printf("Resolved %d artifacts (including dependencies)\n", len(sortedArtifacts))
 	out.println()
 
-	// Download artifacts
+	// Determine base directories
+	claudeDir, err := utils.GetClaudeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get Claude directory: %w", err)
+	}
+
+	// For cleanup and tracking, use a consistent base (repo root if in repo, otherwise global)
+	trackingBase := claudeDir
+	if gitContext.IsRepo {
+		trackingBase = filepath.Join(gitContext.RepoRoot, ".claude")
+	}
+
+	// Load previous installation state
+	previousInstall := loadPreviousInstallState(trackingBase, out)
+
+	// Determine which artifacts need to be installed (new or changed versions)
+	artifactsToInstall := determineArtifactsToInstall(previousInstall, sortedArtifacts, out)
+
+	// Clean up artifacts that were removed from lock file
+	cleanupRemovedArtifacts(ctx, previousInstall, sortedArtifacts, trackingBase, repo, out)
+
+	// Early exit if nothing to install
+	if len(artifactsToInstall) == 0 {
+		// Save state even if nothing changed (updates timestamp)
+		saveInstallationState(trackingBase, lockFile, sortedArtifacts, out)
+		out.println("\n✓ No changes needed")
+		return nil
+	}
+
+	out.println()
+
+	// Download only the artifacts that need to be installed
 	out.println("Downloading artifacts...")
 	fetcher := artifacts.NewArtifactFetcher(repo)
-	results, err := fetcher.FetchArtifacts(ctx, sortedArtifacts, 10)
+	results, err := fetcher.FetchArtifacts(ctx, artifactsToInstall, 10)
 	if err != nil {
 		return fmt.Errorf("failed to fetch artifacts: %w", err)
 	}
@@ -204,115 +235,18 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		out.println()
 	}
 
-	out.printf("Downloaded %d/%d artifacts successfully\n", len(successfulDownloads), len(sortedArtifacts))
+	out.printf("Downloaded %d/%d artifacts successfully\n", len(successfulDownloads), len(artifactsToInstall))
 	out.println()
 
 	if len(successfulDownloads) == 0 {
 		return fmt.Errorf("no artifacts downloaded successfully")
 	}
 
-	// Determine base directories
-	claudeDir, err := utils.GetClaudeDir()
-	if err != nil {
-		return fmt.Errorf("failed to get Claude directory: %w", err)
-	}
+	// Install artifacts to their appropriate locations
+	installResult := installArtifacts(ctx, successfulDownloads, gitContext, currentScope, claudeDir, repo, out)
 
-	// For cleanup and tracking, use a consistent base (repo root if in repo, otherwise global)
-	trackingBase := claudeDir
-	if gitContext.IsRepo {
-		trackingBase = filepath.Join(gitContext.RepoRoot, ".claude")
-	}
-
-	// Load previous installation state
-	previousInstall, err := artifacts.LoadInstalledArtifacts(trackingBase)
-	if err != nil {
-		out.printfErr("Warning: failed to load previous installation state: %v\n", err)
-		previousInstall = &artifacts.InstalledArtifacts{
-			Version:   "1.0",
-			Artifacts: []artifacts.InstalledArtifact{},
-		}
-	}
-
-	// Find removed artifacts
-	removedArtifacts := artifacts.FindRemovedArtifacts(previousInstall, sortedArtifacts)
-	if len(removedArtifacts) > 0 {
-		out.printf("\nCleaning up %d removed artifacts...\n", len(removedArtifacts))
-		installer := artifacts.NewArtifactInstaller(repo, trackingBase)
-		if err := installer.RemoveArtifacts(ctx, removedArtifacts); err != nil {
-			out.printfErr("Warning: cleanup failed: %v\n", err)
-		} else {
-			for _, artifact := range removedArtifacts {
-				out.printf("  - Removed %s\n", artifact.Name)
-			}
-		}
-	}
-
-	// Install each artifact to its appropriate location based on scope
-	out.println("Installing artifacts...")
-
-	installResult := &artifacts.InstallResult{
-		Installed: []string{},
-		Failed:    []string{},
-		Errors:    []error{},
-	}
-
-	for _, item := range successfulDownloads {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		// Get all installation locations for this artifact in the current context
-		var installLocations []string
-		if gitContext.IsRepo {
-			installLocations = scope.GetInstallLocations(item.Artifact, currentScope, gitContext.RepoRoot, claudeDir)
-		} else {
-			installLocations = []string{claudeDir}
-		}
-
-		if len(installLocations) == 0 {
-			// No installation locations, skip (shouldn't happen but be safe)
-			continue
-		}
-
-		// Install artifact to each location
-		for _, targetBase := range installLocations {
-			// Install the artifact
-			installer := artifacts.NewArtifactInstaller(repo, targetBase)
-			err := installer.Install(ctx, item.Artifact, item.ZipData, item.Metadata)
-
-			if err != nil {
-				installResult.Failed = append(installResult.Failed, item.Artifact.Name)
-				installResult.Errors = append(installResult.Errors, fmt.Errorf("%s: %w", item.Artifact.Name, err))
-				continue
-			}
-		}
-
-		// Mark as installed once (even if installed to multiple locations)
-		installResult.Installed = append(installResult.Installed, item.Artifact.Name)
-	}
-
-	// Save new installation state
-	newInstall := &artifacts.InstalledArtifacts{
-		Version:         "1.0",
-		LockFileVersion: lockFile.Version,
-		InstalledAt:     time.Now(),
-		Artifacts:       []artifacts.InstalledArtifact{},
-	}
-
-	for _, artifact := range sortedArtifacts {
-		newInstall.Artifacts = append(newInstall.Artifacts, artifacts.InstalledArtifact{
-			Name:    artifact.Name,
-			Version: artifact.Version,
-			Type:    string(artifact.Type),
-			// InstallPath will be determined by handler
-		})
-	}
-
-	if err := artifacts.SaveInstalledArtifacts(trackingBase, newInstall); err != nil {
-		out.printfErr("Warning: failed to save installation state: %v\n", err)
-	}
+	// Save new installation state (saves ALL artifacts from lock file, not just changed ones)
+	saveInstallationState(trackingBase, lockFile, sortedArtifacts, out)
 
 	// Report results
 	out.println()
@@ -331,4 +265,129 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// loadPreviousInstallState loads the previous installation state from tracker file
+func loadPreviousInstallState(trackingBase string, out *outputHelper) *artifacts.InstalledArtifacts {
+	previousInstall, err := artifacts.LoadInstalledArtifacts(trackingBase)
+	if err != nil {
+		out.printfErr("Warning: failed to load previous installation state: %v\n", err)
+		return &artifacts.InstalledArtifacts{
+			Version:   artifacts.TrackerFormatVersion,
+			Artifacts: []artifacts.InstalledArtifact{},
+		}
+	}
+	return previousInstall
+}
+
+// determineArtifactsToInstall finds which artifacts need to be installed (new or changed)
+func determineArtifactsToInstall(previousInstall *artifacts.InstalledArtifacts, sortedArtifacts []*lockfile.Artifact, out *outputHelper) []*lockfile.Artifact {
+	artifactsToInstall := artifacts.FindChangedOrNewArtifacts(previousInstall, sortedArtifacts)
+
+	if len(artifactsToInstall) == 0 {
+		out.println("✓ All artifacts are up to date")
+		return artifactsToInstall
+	}
+
+	if len(artifactsToInstall) < len(sortedArtifacts) {
+		skipped := len(sortedArtifacts) - len(artifactsToInstall)
+		out.printf("Found %d new/changed artifact(s), %d unchanged\n", len(artifactsToInstall), skipped)
+	}
+
+	return artifactsToInstall
+}
+
+// cleanupRemovedArtifacts removes artifacts that are no longer in the lock file
+func cleanupRemovedArtifacts(ctx context.Context, previousInstall *artifacts.InstalledArtifacts, sortedArtifacts []*lockfile.Artifact, trackingBase string, repo repository.Repository, out *outputHelper) {
+	removedArtifacts := artifacts.FindRemovedArtifacts(previousInstall, sortedArtifacts)
+	if len(removedArtifacts) == 0 {
+		return
+	}
+
+	out.printf("\nCleaning up %d removed artifact(s)...\n", len(removedArtifacts))
+	installer := artifacts.NewArtifactInstaller(repo, trackingBase)
+	if err := installer.RemoveArtifacts(ctx, removedArtifacts); err != nil {
+		out.printfErr("Warning: cleanup failed: %v\n", err)
+		return
+	}
+
+	for _, artifact := range removedArtifacts {
+		out.printf("  - Removed %s\n", artifact.Name)
+	}
+}
+
+// installArtifacts installs artifacts to their appropriate locations
+func installArtifacts(ctx context.Context, successfulDownloads []*artifacts.ArtifactWithMetadata, gitContext *gitutil.GitContext, currentScope *scope.Scope, claudeDir string, repo repository.Repository, out *outputHelper) *artifacts.InstallResult {
+	out.println("Installing artifacts...")
+
+	installResult := &artifacts.InstallResult{
+		Installed: []string{},
+		Failed:    []string{},
+		Errors:    []error{},
+	}
+
+	for _, item := range successfulDownloads {
+		select {
+		case <-ctx.Done():
+			installResult.Failed = append(installResult.Failed, item.Artifact.Name)
+			installResult.Errors = append(installResult.Errors, ctx.Err())
+			continue
+		default:
+		}
+
+		// Get all installation locations for this artifact in the current context
+		var installLocations []string
+		if gitContext.IsRepo {
+			installLocations = scope.GetInstallLocations(item.Artifact, currentScope, gitContext.RepoRoot, claudeDir)
+		} else {
+			installLocations = []string{claudeDir}
+		}
+
+		if len(installLocations) == 0 {
+			continue
+		}
+
+		// Install artifact to each location
+		installFailed := false
+		for _, targetBase := range installLocations {
+			installer := artifacts.NewArtifactInstaller(repo, targetBase)
+			err := installer.Install(ctx, item.Artifact, item.ZipData, item.Metadata)
+
+			if err != nil {
+				installResult.Failed = append(installResult.Failed, item.Artifact.Name)
+				installResult.Errors = append(installResult.Errors, fmt.Errorf("%s: %w", item.Artifact.Name, err))
+				installFailed = true
+				break
+			}
+		}
+
+		if !installFailed {
+			installResult.Installed = append(installResult.Installed, item.Artifact.Name)
+		}
+	}
+
+	return installResult
+}
+
+// saveInstallationState saves the current installation state to tracker file
+func saveInstallationState(trackingBase string, lockFile *lockfile.LockFile, sortedArtifacts []*lockfile.Artifact, out *outputHelper) {
+	newInstall := &artifacts.InstalledArtifacts{
+		Version:         artifacts.TrackerFormatVersion,
+		LockFileVersion: lockFile.Version,
+		InstalledAt:     time.Now(),
+		Artifacts:       []artifacts.InstalledArtifact{},
+	}
+
+	for _, artifact := range sortedArtifacts {
+		newInstall.Artifacts = append(newInstall.Artifacts, artifacts.InstalledArtifact{
+			Name:    artifact.Name,
+			Version: artifact.Version,
+			Type:    string(artifact.Type),
+			// InstallPath will be populated in future enhancement
+		})
+	}
+
+	if err := artifacts.SaveInstalledArtifacts(trackingBase, newInstall); err != nil {
+		out.printfErr("Warning: failed to save installation state: %v\n", err)
+	}
 }

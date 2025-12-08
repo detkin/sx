@@ -357,6 +357,12 @@ func RemoveFileFromZip(zipData []byte, filename string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// ReplaceFileInZip replaces an existing file in a zip archive
+// This is an alias for AddFileToZip which already handles replacement
+func ReplaceFileInZip(zipData []byte, filename string, content []byte) ([]byte, error) {
+	return AddFileToZip(zipData, filename, content)
+}
+
 // CompareZipContents compares two zip files by computing and comparing their hashes
 // Excludes metadata.toml from comparison to focus on actual content
 func CompareZipContents(zipData1, zipData2 []byte) (bool, error) {

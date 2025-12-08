@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/sleuth-io/skills/internal/metadata"
 	"github.com/sleuth-io/skills/internal/utils"
@@ -105,6 +106,11 @@ func (h *CommandHandler) Install(ctx context.Context, zipData []byte, targetBase
 		return fmt.Errorf("failed to write command file: %w", err)
 	}
 
+	// Write metadata file for version tracking
+	if err := h.writeMetadataFile(zipData, installPath); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -120,6 +126,9 @@ func (h *CommandHandler) Remove(ctx context.Context, targetBase string) error {
 	if err := os.Remove(installPath); err != nil {
 		return fmt.Errorf("failed to remove command: %w", err)
 	}
+
+	// Remove metadata file if it exists
+	h.removeMetadataFile(installPath)
 
 	return nil
 }
@@ -173,4 +182,81 @@ func (h *CommandHandler) Validate(zipData []byte) error {
 	}
 
 	return nil
+}
+
+// writeMetadataFile writes the metadata file alongside the command for version tracking
+func (h *CommandHandler) writeMetadataFile(zipData []byte, installPath string) error {
+	metadataPath := strings.TrimSuffix(installPath, ".md") + "-metadata.toml"
+	metadataBytes, err := utils.ReadZipFile(zipData, "metadata.toml")
+	if err != nil {
+		// metadata.toml doesn't exist in zip, that's okay (backwards compatibility)
+		return nil
+	}
+
+	// Write metadata file alongside the command
+	if err := os.WriteFile(metadataPath, metadataBytes, 0644); err != nil {
+		return fmt.Errorf("failed to write metadata file: %w", err)
+	}
+
+	return nil
+}
+
+// removeMetadataFile removes the metadata file if it exists
+func (h *CommandHandler) removeMetadataFile(installPath string) {
+	metadataPath := strings.TrimSuffix(installPath, ".md") + "-metadata.toml"
+	if utils.FileExists(metadataPath) {
+		os.Remove(metadataPath) // Ignore errors, metadata is optional
+	}
+}
+
+// CanDetectInstalledState returns true since commands now preserve metadata via adjacent files
+func (h *CommandHandler) CanDetectInstalledState() bool {
+	return true
+}
+
+// ScanInstalled scans for installed command artifacts by looking for -metadata.toml files
+func (h *CommandHandler) ScanInstalled(targetBase string) ([]InstalledArtifactInfo, error) {
+	var artifacts []InstalledArtifactInfo
+
+	commandsPath := filepath.Join(targetBase, "commands")
+	if !utils.IsDirectory(commandsPath) {
+		return artifacts, nil
+	}
+
+	files, err := os.ReadDir(commandsPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read commands directory: %w", err)
+	}
+
+	for _, file := range files {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), ".md") {
+			continue
+		}
+
+		// Look for corresponding metadata file
+		baseName := strings.TrimSuffix(file.Name(), ".md")
+		metadataPath := filepath.Join(commandsPath, baseName+"-metadata.toml")
+
+		if !utils.FileExists(metadataPath) {
+			continue // No metadata, can't detect version
+		}
+
+		meta, err := metadata.ParseFile(metadataPath)
+		if err != nil {
+			continue // Skip if can't parse
+		}
+
+		if meta.Artifact.Type != "command" {
+			continue
+		}
+
+		artifacts = append(artifacts, InstalledArtifactInfo{
+			Name:        meta.Artifact.Name,
+			Version:     meta.Artifact.Version,
+			Type:        meta.Artifact.Type,
+			InstallPath: filepath.Join("commands", file.Name()),
+		})
+	}
+
+	return artifacts, nil
 }
