@@ -41,6 +41,7 @@ func TestUpdateCommandFlags(t *testing.T) {
 	checkFlag := cmd.Flags().Lookup("check")
 	if checkFlag == nil {
 		t.Error("Expected --check flag to exist")
+		return
 	}
 
 	if checkFlag.DefValue != "false" {

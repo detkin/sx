@@ -38,15 +38,17 @@ func GetTrackerPath(targetBase string) string {
 	// For global (~/.claude), use "global"
 	// For repo-scoped, use a hash of the repo path
 	scopeKey := "global"
-	if !filepath.IsAbs(targetBase) || !filepath.HasPrefix(targetBase, os.Getenv("HOME")) {
-		// This is a repo-scoped path, hash it
-		scopeKey = utils.URLHash(targetBase)
-	} else if homeDir, err := os.UserHomeDir(); err == nil {
+
+	// Check if this is the global claude directory
+	if homeDir, err := os.UserHomeDir(); err == nil {
 		claudeDir := filepath.Join(homeDir, ".claude")
 		if targetBase != claudeDir {
 			// Not the global claude dir, must be repo-scoped
 			scopeKey = utils.URLHash(targetBase)
 		}
+	} else if !filepath.IsAbs(targetBase) {
+		// If we can't get home dir and path is not absolute, it's repo-scoped
+		scopeKey = utils.URLHash(targetBase)
 	}
 
 	// Get tracker path from cache

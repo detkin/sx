@@ -109,8 +109,18 @@ func TestLoadNoConfig(t *testing.T) {
 	// Create a temporary home directory with no configs
 	tmpHome := t.TempDir()
 	originalHome := os.Getenv("HOME")
+	originalXDG := os.Getenv("XDG_CONFIG_HOME")
+	originalConfigDir := os.Getenv("SKILLS_CONFIG_DIR")
+
 	os.Setenv("HOME", tmpHome)
-	defer os.Setenv("HOME", originalHome)
+	os.Setenv("XDG_CONFIG_HOME", "")
+	os.Setenv("SKILLS_CONFIG_DIR", "")
+
+	defer func() {
+		os.Setenv("HOME", originalHome)
+		os.Setenv("XDG_CONFIG_HOME", originalXDG)
+		os.Setenv("SKILLS_CONFIG_DIR", originalConfigDir)
+	}()
 
 	// Load should fail
 	_, err := Load()
