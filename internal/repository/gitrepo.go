@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"text/template"
 
 	"github.com/sleuth-io/skills/internal/cache"
@@ -37,6 +38,27 @@ const (
 	readmeTemplateVersion = "1"
 )
 
+var (
+	// Global mutex map to protect concurrent access to git repositories
+	// Key is the repository URL
+	repoMutexes   = make(map[string]*sync.Mutex)
+	repoMutexLock sync.Mutex
+)
+
+// getRepoMutex returns a mutex for the given repository URL
+func getRepoMutex(repoURL string) *sync.Mutex {
+	repoMutexLock.Lock()
+	defer repoMutexLock.Unlock()
+
+	if mu, exists := repoMutexes[repoURL]; exists {
+		return mu
+	}
+
+	mu := &sync.Mutex{}
+	repoMutexes[repoURL] = mu
+	return mu
+}
+
 // GitRepository implements Repository for Git repositories
 type GitRepository struct {
 	repoURL     string
@@ -45,6 +67,7 @@ type GitRepository struct {
 	httpHandler *HTTPSourceHandler
 	pathHandler *PathSourceHandler
 	gitHandler  *GitSourceHandler
+	mu          *sync.Mutex // Per-repo mutex for git operations
 }
 
 // NewGitRepository creates a new Git repository
@@ -65,6 +88,7 @@ func NewGitRepository(repoURL string) (*GitRepository, error) {
 		httpHandler: NewHTTPSourceHandler(""),       // No auth token for git repos
 		pathHandler: NewPathSourceHandler(repoPath), // Use repo path for relative paths
 		gitHandler:  NewGitSourceHandler(gitClient),
+		mu:          getRepoMutex(repoURL), // Get or create mutex for this repo
 	}, nil
 }
 
@@ -78,6 +102,10 @@ func (g *GitRepository) Authenticate(ctx context.Context) (string, error) {
 
 // GetLockFile retrieves the lock file from the Git repository
 func (g *GitRepository) GetLockFile(ctx context.Context, cachedETag string) (content []byte, etag string, notModified bool, err error) {
+	// Lock to prevent concurrent git operations on the same repository
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
 	// Clone or update repository
 	if err := g.cloneOrUpdate(ctx); err != nil {
 		return nil, "", false, fmt.Errorf("failed to clone/update repository: %w", err)
@@ -101,6 +129,12 @@ func (g *GitRepository) GetLockFile(ctx context.Context, cachedETag string) (con
 
 // GetArtifact downloads an artifact using its source configuration
 func (g *GitRepository) GetArtifact(ctx context.Context, artifact *lockfile.Artifact) ([]byte, error) {
+	// Lock only for path-based artifacts that read from the repository
+	if artifact.GetSourceType() == "path" {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+	}
+
 	// Dispatch to appropriate source handler based on artifact source type
 	switch artifact.GetSourceType() {
 	case "http":
@@ -116,6 +150,10 @@ func (g *GitRepository) GetArtifact(ctx context.Context, artifact *lockfile.Arti
 
 // AddArtifact uploads an artifact to the Git repository
 func (g *GitRepository) AddArtifact(ctx context.Context, artifact *lockfile.Artifact, zipData []byte) error {
+	// Lock to prevent concurrent git operations
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
 	// Clone or update repository
 	if err := g.cloneOrUpdate(ctx); err != nil {
 		return fmt.Errorf("failed to clone/update repository: %w", err)
