@@ -11,9 +11,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"text/template"
+	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/sleuth-io/skills/internal/cache"
 	"github.com/sleuth-io/skills/internal/constants"
 	"github.com/sleuth-io/skills/internal/git"
@@ -38,27 +39,6 @@ const (
 	readmeTemplateVersion = "1"
 )
 
-var (
-	// Global mutex map to protect concurrent access to git repositories
-	// Key is the repository URL
-	repoMutexes   = make(map[string]*sync.Mutex)
-	repoMutexLock sync.Mutex
-)
-
-// getRepoMutex returns a mutex for the given repository URL
-func getRepoMutex(repoURL string) *sync.Mutex {
-	repoMutexLock.Lock()
-	defer repoMutexLock.Unlock()
-
-	if mu, exists := repoMutexes[repoURL]; exists {
-		return mu
-	}
-
-	mu := &sync.Mutex{}
-	repoMutexes[repoURL] = mu
-	return mu
-}
-
 // GitRepository implements Repository for Git repositories
 type GitRepository struct {
 	repoURL     string
@@ -67,7 +47,6 @@ type GitRepository struct {
 	httpHandler *HTTPSourceHandler
 	pathHandler *PathSourceHandler
 	gitHandler  *GitSourceHandler
-	mu          *sync.Mutex // Per-repo mutex for git operations
 }
 
 // NewGitRepository creates a new Git repository
@@ -88,7 +67,6 @@ func NewGitRepository(repoURL string) (*GitRepository, error) {
 		httpHandler: NewHTTPSourceHandler(""),       // No auth token for git repos
 		pathHandler: NewPathSourceHandler(repoPath), // Use repo path for relative paths
 		gitHandler:  NewGitSourceHandler(gitClient),
-		mu:          getRepoMutex(repoURL), // Get or create mutex for this repo
 	}, nil
 }
 
@@ -100,11 +78,37 @@ func (g *GitRepository) Authenticate(ctx context.Context) (string, error) {
 	return "", nil
 }
 
+// acquireFileLock acquires a file lock for the git repository to prevent cross-process conflicts
+func (g *GitRepository) acquireFileLock(ctx context.Context) (*flock.Flock, error) {
+	lockFile := filepath.Join(g.repoPath, ".lock")
+
+	// Ensure parent directory exists
+	if err := os.MkdirAll(filepath.Dir(lockFile), 0755); err != nil {
+		return nil, fmt.Errorf("failed to create lock directory: %w", err)
+	}
+
+	fileLock := flock.New(lockFile)
+
+	// Try to acquire the lock with a timeout
+	locked, err := fileLock.TryLockContext(ctx, 100*time.Millisecond)
+	if err != nil {
+		return nil, fmt.Errorf("failed to acquire file lock: %w", err)
+	}
+	if !locked {
+		return nil, fmt.Errorf("could not acquire file lock (timeout)")
+	}
+
+	return fileLock, nil
+}
+
 // GetLockFile retrieves the lock file from the Git repository
 func (g *GitRepository) GetLockFile(ctx context.Context, cachedETag string) (content []byte, etag string, notModified bool, err error) {
-	// Lock to prevent concurrent git operations on the same repository
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	// Acquire file lock to prevent concurrent git operations (both in-process and cross-process)
+	fileLock, err := g.acquireFileLock(ctx)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("failed to acquire lock: %w", err)
+	}
+	defer func() { _ = fileLock.Unlock() }()
 
 	// Clone or update repository
 	if err := g.cloneOrUpdate(ctx); err != nil {
@@ -131,8 +135,11 @@ func (g *GitRepository) GetLockFile(ctx context.Context, cachedETag string) (con
 func (g *GitRepository) GetArtifact(ctx context.Context, artifact *lockfile.Artifact) ([]byte, error) {
 	// Lock only for path-based artifacts that read from the repository
 	if artifact.GetSourceType() == "path" {
-		g.mu.Lock()
-		defer g.mu.Unlock()
+		fileLock, err := g.acquireFileLock(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to acquire lock: %w", err)
+		}
+		defer func() { _ = fileLock.Unlock() }()
 	}
 
 	// Dispatch to appropriate source handler based on artifact source type
@@ -150,9 +157,12 @@ func (g *GitRepository) GetArtifact(ctx context.Context, artifact *lockfile.Arti
 
 // AddArtifact uploads an artifact to the Git repository
 func (g *GitRepository) AddArtifact(ctx context.Context, artifact *lockfile.Artifact, zipData []byte) error {
-	// Lock to prevent concurrent git operations
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	// Acquire file lock to prevent concurrent git operations
+	fileLock, err := g.acquireFileLock(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to acquire lock: %w", err)
+	}
+	defer func() { _ = fileLock.Unlock() }()
 
 	// Clone or update repository
 	if err := g.cloneOrUpdate(ctx); err != nil {
