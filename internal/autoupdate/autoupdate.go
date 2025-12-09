@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
-	"syscall"
 	"time"
 
 	"github.com/creativeprojects/go-selfupdate"
@@ -71,17 +69,9 @@ func checkAndUpdate() error {
 	log := logger.Get()
 	log.Info("autoupdate completed", "old_version", currentVersion, "new_version", release.Version)
 
-	// Successfully updated to a new version!
-	if runtime.GOOS != "windows" {
-		// On Unix-like systems, exec into the new binary to seamlessly continue
-		exe, err := os.Executable()
-		if err == nil {
-			_ = syscall.Exec(exe, os.Args, os.Environ())
-		}
-	}
-
-	// On Windows, we can't restart automatically, but the update is done
-	// The next time they run the command, it'll be the new version
+	// Note: We don't exec into the new binary because it can interrupt
+	// critical operations like git clones. The new version will be used
+	// on the next invocation.
 	_ = release
 
 	return nil
