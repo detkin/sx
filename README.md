@@ -18,7 +18,27 @@ Initialize your skills configuration:
 skills init
 ```
 
-This creates a configuration file in your home directory.
+This creates a configuration file in your home directory and installs a global Claude Code hook to
+automatically install skills for new sessions.
+
+### Repository Types
+
+During initialization, you'll choose from three repository types:
+
+1. **Local Path** (default) - Store skills in a local directory
+   - Easiest option for getting started
+   - Great for development and testing
+   - Directory will be created automatically if it doesn't exist
+
+2. **Git Repository** - Store skills in a Git repository
+   - Uses your local Git credentials
+   - Ideal for small team collaboration and version control
+   - Skills are synced via standard Git operations
+
+3. **Sleuth Server** - Connect to Sleuth for centralized skill management
+   - Provides a UI for managing, creating, and discovering new skills in your code
+   - No authentication credentials needed - handled automatically
+   - Best for teams wanting a centralized skill registry with visual management
 
 ## Usage
 
@@ -33,13 +53,7 @@ skills add skill.zip
 
 ### Managing Dependencies
 
-Generate a lock file from your requirements:
-
-```bash
-skills lock
-```
-
-Install skills from the lock file:
+Install skills:
 
 ```bash
 skills install
