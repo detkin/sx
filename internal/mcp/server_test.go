@@ -61,6 +61,10 @@ func (m *mockClient) InstallHooks(ctx context.Context) error {
 	return nil
 }
 
+func (m *mockClient) ShouldInstall(ctx context.Context) (bool, error) {
+	return true, nil
+}
+
 func (m *mockClient) addSkill(name, description, content, baseDir string) {
 	m.skills[name] = &clients.SkillContent{
 		Name:        name,

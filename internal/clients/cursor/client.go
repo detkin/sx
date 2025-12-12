@@ -2,14 +2,19 @@ package cursor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/sleuth-io/skills/internal/artifact"
+	"github.com/sleuth-io/skills/internal/cache"
 	"github.com/sleuth-io/skills/internal/clients"
 	"github.com/sleuth-io/skills/internal/clients/cursor/handlers"
 	"github.com/sleuth-io/skills/internal/handlers/dirartifact"
+	"github.com/sleuth-io/skills/internal/logger"
 	"github.com/sleuth-io/skills/internal/metadata"
 )
 
@@ -201,6 +206,8 @@ func (c *Client) determineTargetBase(scope *clients.InstallScope) string {
 // This must be called even when no new skills are installed, to ensure the
 // local rules file exists (Cursor doesn't load global rules).
 func (c *Client) EnsureSkillsSupport(ctx context.Context, scope *clients.InstallScope) error {
+	log := logger.Get()
+
 	// 1. Register skills MCP server globally (idempotent)
 	if err := c.registerSkillsMCPServer(); err != nil {
 		return fmt.Errorf("failed to register MCP server: %w", err)
@@ -208,13 +215,17 @@ func (c *Client) EnsureSkillsSupport(ctx context.Context, scope *clients.Install
 
 	// 2. Collect skills from all applicable scopes
 	allSkills := c.collectAllScopeSkills(scope)
+	log.Debug("collected skills for rules file", "count", len(allSkills), "scope_type", scope.Type, "repo_root", scope.RepoRoot)
 
 	// 3. Determine local target (current working directory context)
 	localTarget := c.determineLocalTarget(scope)
 	if localTarget == "" {
 		// No local context (shouldn't happen if scope is properly set)
+		log.Warn("no local target for rules file", "scope_type", scope.Type, "repo_root", scope.RepoRoot)
 		return nil
 	}
+
+	log.Debug("generating rules file", "target", localTarget, "skill_count", len(allSkills))
 
 	// 4. Generate rules file with all skills
 	return c.generateSkillsRulesFileFromSkills(allSkills, localTarget)
@@ -421,10 +432,169 @@ func (c *Client) ReadSkill(ctx context.Context, name string, scope *clients.Inst
 	}, nil
 }
 
-// InstallHooks is a no-op for Cursor since it doesn't need system hooks.
-// This method exists to satisfy the Client interface.
+// InstallHooks installs Cursor-specific hooks (auto-install on prompt submission).
 func (c *Client) InstallHooks(ctx context.Context) error {
-	// Cursor doesn't need system hooks
+	return c.installBeforeSubmitPromptHook()
+}
+
+// ShouldInstall checks if installation should proceed based on conversation tracking.
+// Cursor fires beforeSubmitPrompt on every prompt, so we track conversation IDs
+// to only run install once per conversation.
+func (c *Client) ShouldInstall(ctx context.Context) (bool, error) {
+	log := logger.Get()
+
+	// Check if stdin has data (hook mode passes JSON via stdin)
+	if !hasStdinData() {
+		// Not a hook call (e.g., manual invocation), proceed with install
+		return true, nil
+	}
+
+	// Try to parse Cursor hook input
+	input, err := parseCursorHookInput()
+	if err != nil {
+		// Can't parse input, proceed with install anyway
+		log.Debug("failed to parse cursor hook input, proceeding with install", "error", err)
+		return true, nil
+	}
+
+	// No conversation ID means we can't track, proceed with install
+	if input.ConversationID == "" {
+		return true, nil
+	}
+
+	// Check session cache
+	sessionCache, err := cache.NewSessionCache(c.ID())
+	if err != nil {
+		log.Error("failed to create session cache", "error", err)
+		return true, nil // Proceed on error
+	}
+
+	// Already seen this conversation? Skip install
+	if sessionCache.HasSession(input.ConversationID) {
+		log.Debug("conversation already seen, skipping install", "conversation_id", input.ConversationID)
+		return false, nil
+	}
+
+	// Record optimistically (before install starts)
+	if err := sessionCache.RecordSession(input.ConversationID); err != nil {
+		log.Error("failed to record session", "error", err)
+		// Continue anyway - worst case we install again next time
+	}
+
+	// Cull old entries periodically (5 days)
+	if err := sessionCache.CullOldEntries(5 * 24 * time.Hour); err != nil {
+		log.Debug("failed to cull old session entries", "error", err)
+		// Non-fatal, continue
+	}
+
+	return true, nil
+}
+
+// cursorHookInput represents the JSON structure passed by Cursor hooks via stdin
+type cursorHookInput struct {
+	ConversationID string   `json:"conversation_id"`
+	GenerationID   string   `json:"generation_id"`
+	Prompt         string   `json:"prompt"`
+	HookEventName  string   `json:"hook_event_name"`
+	WorkspaceRoots []string `json:"workspace_roots"` // Workspace directory paths
+	Model          string   `json:"model"`
+	CursorVersion  string   `json:"cursor_version"`
+}
+
+// hasStdinData checks if there's data available on stdin without blocking.
+// Returns false if stdin is a terminal or has no data.
+func hasStdinData() bool {
+	stat, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	// Check if stdin is a pipe or has data
+	return (stat.Mode() & os.ModeCharDevice) == 0
+}
+
+// parseCursorHookInput reads and parses the Cursor hook JSON from stdin.
+// If stdin was already read by ParseWorkspaceDir, it uses the cached version.
+func parseCursorHookInput() (*cursorHookInput, error) {
+	var input cursorHookInput
+
+	// Try to use cached stdin first (if ParseWorkspaceDir was called)
+	if cachedReader := GetCachedStdin(); cachedReader != nil {
+		decoder := json.NewDecoder(cachedReader)
+		if err := decoder.Decode(&input); err != nil {
+			return nil, fmt.Errorf("failed to decode hook input from cache: %w", err)
+		}
+		return &input, nil
+	}
+
+	// Fallback: read from stdin directly
+	decoder := json.NewDecoder(os.Stdin)
+	if err := decoder.Decode(&input); err != nil {
+		return nil, fmt.Errorf("failed to decode hook input: %w", err)
+	}
+	return &input, nil
+}
+
+// installBeforeSubmitPromptHook installs the beforeSubmitPrompt hook for auto-install
+func (c *Client) installBeforeSubmitPromptHook() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	hooksJSONPath := filepath.Join(home, ".cursor", "hooks.json")
+	log := logger.Get()
+
+	// Read existing hooks.json
+	config, err := handlers.ReadHooksJSON(hooksJSONPath)
+	if err != nil {
+		return fmt.Errorf("failed to read hooks.json: %w", err)
+	}
+
+	hookCommand := "skills install --hook-mode --client=cursor"
+
+	// First, check if exact hook command already exists
+	exactMatch := false
+	var oldHookRef map[string]interface{}
+	if hooks, ok := config.Hooks["beforeSubmitPrompt"]; ok {
+		for _, hook := range hooks {
+			if cmd, ok := hook["command"].(string); ok {
+				if cmd == hookCommand {
+					exactMatch = true
+					break
+				}
+				if strings.HasPrefix(cmd, "skills install") {
+					oldHookRef = hook // Remember for updating
+				}
+			}
+		}
+	}
+
+	// Already have exact match, nothing to do
+	if exactMatch {
+		return nil
+	}
+
+	// Get current working directory for context logging
+	cwd, _ := os.Getwd()
+
+	// Update old hook if found, otherwise add new
+	if oldHookRef != nil {
+		oldHookRef["command"] = hookCommand
+		log.Info("hook updated", "hook", "beforeSubmitPrompt", "command", hookCommand, "cwd", cwd)
+	} else {
+		if config.Hooks["beforeSubmitPrompt"] == nil {
+			config.Hooks["beforeSubmitPrompt"] = []map[string]interface{}{}
+		}
+		config.Hooks["beforeSubmitPrompt"] = append(config.Hooks["beforeSubmitPrompt"], map[string]interface{}{
+			"command": hookCommand,
+		})
+		log.Info("hook installed", "hook", "beforeSubmitPrompt", "command", hookCommand, "cwd", cwd)
+	}
+
+	if err := handlers.WriteHooksJSON(hooksJSONPath, config); err != nil {
+		return fmt.Errorf("failed to write hooks.json: %w", err)
+	}
+
 	return nil
 }
 

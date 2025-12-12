@@ -44,6 +44,13 @@ type Client interface {
 	// This is called during installation to set up hooks in the client's configuration.
 	// Clients that don't need hooks can return nil.
 	InstallHooks(ctx context.Context) error
+
+	// ShouldInstall checks if installation should proceed in hook mode.
+	// Returns true to proceed, false to skip.
+	// Called before any installation work begins.
+	// For clients like Cursor that fire hooks on every prompt, this enables
+	// tracking conversation IDs to only run install once per conversation.
+	ShouldInstall(ctx context.Context) (bool, error)
 }
 
 // InstalledSkill represents a skill that has been installed

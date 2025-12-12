@@ -240,3 +240,10 @@ func (c *Client) EnsureSkillsSupport(ctx context.Context, scope *clients.Install
 func (c *Client) InstallHooks(ctx context.Context) error {
 	return installHooks()
 }
+
+// ShouldInstall always returns true for Claude Code.
+// Claude Code has a SessionStart hook that fires once per session, so no
+// deduplication is needed.
+func (c *Client) ShouldInstall(ctx context.Context) (bool, error) {
+	return true, nil
+}

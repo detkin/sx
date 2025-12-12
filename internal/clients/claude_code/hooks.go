@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/sleuth-io/skills/internal/logger"
 )
@@ -64,52 +65,70 @@ func installSessionStartHook(claudeDir string) error {
 		sessionStart = []interface{}{}
 	}
 
-	// Check if our hook already exists
-	hookExists := false
+	hookCommand := "skills install --hook-mode --client=claude-code"
+
+	// First, check if exact hook command already exists
+	exactMatch := false
+	var oldHookRef map[string]interface{}
 	for _, item := range sessionStart {
 		if hookMap, ok := item.(map[string]interface{}); ok {
 			if hooksArray, ok := hookMap["hooks"].([]interface{}); ok {
 				for _, h := range hooksArray {
 					if hMap, ok := h.(map[string]interface{}); ok {
-						if cmd, ok := hMap["command"].(string); ok && (cmd == "skills install --hook-mode" || cmd == "skills install" || cmd == "skills install --error-on-change") {
-							hookExists = true
-							break
+						if cmd, ok := hMap["command"].(string); ok {
+							if cmd == hookCommand {
+								exactMatch = true
+								break
+							}
+							if strings.HasPrefix(cmd, "skills install") {
+								oldHookRef = hMap // Remember for updating
+							}
 						}
 					}
 				}
 			}
 		}
-		if hookExists {
+		if exactMatch {
 			break
 		}
 	}
 
-	// Add hook if it doesn't exist
-	if !hookExists {
+	// Already have exact match, nothing to do
+	if exactMatch {
+		return nil
+	}
+
+	// Get current working directory for context logging
+	cwd, _ := os.Getwd()
+
+	// Update old hook if found, otherwise add new
+	if oldHookRef != nil {
+		oldHookRef["command"] = hookCommand
+		log.Info("hook updated", "hook", "SessionStart", "command", hookCommand, "cwd", cwd)
+	} else {
 		newHook := map[string]interface{}{
 			"hooks": []interface{}{
 				map[string]interface{}{
 					"type":    "command",
-					"command": "skills install --hook-mode",
+					"command": hookCommand,
 				},
 			},
 		}
 		sessionStart = append(sessionStart, newHook)
 		hooks["SessionStart"] = sessionStart
+		log.Info("hook installed", "hook", "SessionStart", "command", hookCommand, "cwd", cwd)
+	}
 
-		// Write back to file
-		data, err := json.MarshalIndent(settings, "", "  ")
-		if err != nil {
-			log.Error("failed to marshal settings for SessionStart hook", "error", err)
-			return fmt.Errorf("failed to marshal settings: %w", err)
-		}
+	// Write back to file
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		log.Error("failed to marshal settings for SessionStart hook", "error", err)
+		return fmt.Errorf("failed to marshal settings: %w", err)
+	}
 
-		if err := os.WriteFile(settingsPath, data, 0644); err != nil {
-			log.Error("failed to write settings.json for SessionStart hook", "error", err, "path", settingsPath)
-			return fmt.Errorf("failed to write settings.json: %w", err)
-		}
-
-		log.Info("hook installed", "hook", "SessionStart", "command", "skills install --hook-mode")
+	if err := os.WriteFile(settingsPath, data, 0644); err != nil {
+		log.Error("failed to write settings.json for SessionStart hook", "error", err, "path", settingsPath)
+		return fmt.Errorf("failed to write settings.json: %w", err)
 	}
 
 	return nil

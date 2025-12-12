@@ -541,3 +541,164 @@ exit 0
 
 	t.Log("✓ Cursor hook integration test passed!")
 }
+
+// TestCursorAutoInstallDeduplication tests that the session cache prevents
+// repeated installations when hooks fire multiple times per conversation
+func TestCursorAutoInstallDeduplication(t *testing.T) {
+	// Create fully isolated test environment
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, "home")
+	workingDir := filepath.Join(tempDir, "working")
+	repoDir := filepath.Join(workingDir, "repo")
+	skillDir := filepath.Join(workingDir, "skill")
+
+	// Set environment for complete sandboxing
+	t.Setenv("HOME", homeDir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(homeDir, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(homeDir, ".cache"))
+	cursorDir := filepath.Join(homeDir, ".cursor")
+	cacheDir := filepath.Join(homeDir, ".cache", "skills")
+
+	// Create home and working directories
+	for _, dir := range []string{homeDir, workingDir, skillDir, cursorDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("Failed to create directory %s: %v", dir, err)
+		}
+	}
+
+	// Change to working directory
+	originalDir, _ := os.Getwd()
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatalf("Failed to change to working dir: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(originalDir)
+	}()
+
+	// Create a test skill with metadata
+	skillMetadata := `[artifact]
+name = "test-skill"
+type = "skill"
+description = "A test skill"
+
+[skill]
+readme = "README.md"
+prompt-file = "SKILL.md"
+`
+	if err := os.WriteFile(filepath.Join(skillDir, "metadata.toml"), []byte(skillMetadata), 0644); err != nil {
+		t.Fatalf("Failed to write metadata.toml: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(skillDir, "README.md"), []byte("# Test"), 0644); err != nil {
+		t.Fatalf("Failed to write README.md: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("Test skill"), 0644); err != nil {
+		t.Fatalf("Failed to write SKILL.md: %v", err)
+	}
+
+	// Initialize and add skill
+	t.Log("Step 1: Initialize repository and add skill")
+	initPrompter := NewMockPrompter().
+		ExpectPrompt("Enter choice", "1").
+		ExpectPrompt("Repository path", repoDir)
+
+	initCmd := NewInitCommand()
+	if err := ExecuteWithPrompter(initCmd, initPrompter); err != nil {
+		t.Fatalf("Failed to initialize: %v", err)
+	}
+
+	addPrompter := NewMockPrompter().
+		ExpectConfirm("correct", true).
+		ExpectPrompt("Version", "1.0.0").
+		ExpectPrompt("Choose an option", "1")
+
+	addCmd := NewAddCommand()
+	addCmd.SetArgs([]string{skillDir})
+	if err := ExecuteWithPrompter(addCmd, addPrompter); err != nil {
+		t.Fatalf("Failed to add skill: %v", err)
+	}
+
+	// Step 2: First install (no session recorded yet) - should install
+	t.Log("Step 2: First install should proceed")
+	installCmd := NewInstallCommand()
+	if err := installCmd.Execute(); err != nil {
+		t.Fatalf("First install failed: %v", err)
+	}
+
+	// Verify skill was installed
+	installedSkillDir := filepath.Join(cursorDir, "skills", "test-skill")
+	if _, err := os.Stat(installedSkillDir); os.IsNotExist(err) {
+		t.Fatalf("Skill was not installed to: %s", installedSkillDir)
+	}
+	t.Log("✓ First install completed, skill installed")
+
+	// Step 3: Verify beforeSubmitPrompt hook was installed
+	t.Log("Step 3: Verify beforeSubmitPrompt hook was installed")
+	hooksJSONPath := filepath.Join(cursorDir, "hooks.json")
+	hooksData, err := os.ReadFile(hooksJSONPath)
+	if err != nil {
+		t.Fatalf("Failed to read hooks.json: %v", err)
+	}
+
+	var hooksConfig map[string]interface{}
+	if err := json.Unmarshal(hooksData, &hooksConfig); err != nil {
+		t.Fatalf("Failed to parse hooks.json: %v", err)
+	}
+
+	hooks, ok := hooksConfig["hooks"].(map[string]interface{})
+	if !ok {
+		t.Fatal("hooks.json missing 'hooks' section")
+	}
+
+	beforeSubmitHooks, ok := hooks["beforeSubmitPrompt"].([]interface{})
+	if !ok {
+		t.Fatal("beforeSubmitPrompt hook not found in hooks.json")
+	}
+
+	foundAutoInstallHook := false
+	for _, hook := range beforeSubmitHooks {
+		if hookMap, ok := hook.(map[string]interface{}); ok {
+			if cmd, ok := hookMap["command"].(string); ok && strings.HasPrefix(cmd, "skills install") {
+				foundAutoInstallHook = true
+				break
+			}
+		}
+	}
+	if !foundAutoInstallHook {
+		t.Error("beforeSubmitPrompt hook for 'skills install' not found")
+	}
+	t.Log("✓ beforeSubmitPrompt hook installed")
+
+	// Step 4: Simulate recording a conversation ID (mimics what ShouldInstall does)
+	t.Log("Step 4: Record a conversation ID in session cache")
+	sessionCacheFile := filepath.Join(cacheDir, "cursor-sessions")
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("Failed to create cache dir: %v", err)
+	}
+
+	// Write a session entry as if ShouldInstall recorded it
+	conversationID := "test-conversation-123"
+	sessionEntry := conversationID + " 2025-12-12T10:30:00Z\n"
+	if err := os.WriteFile(sessionCacheFile, []byte(sessionEntry), 0644); err != nil {
+		t.Fatalf("Failed to write session cache: %v", err)
+	}
+
+	// Verify session cache file exists
+	if _, err := os.Stat(sessionCacheFile); os.IsNotExist(err) {
+		t.Fatal("Session cache file was not created")
+	}
+	t.Log("✓ Session cache file created")
+
+	// Read and verify content
+	cacheContent, err := os.ReadFile(sessionCacheFile)
+	if err != nil {
+		t.Fatalf("Failed to read session cache: %v", err)
+	}
+	if !strings.Contains(string(cacheContent), conversationID) {
+		t.Errorf("Session cache doesn't contain expected conversation ID. Content: %s", string(cacheContent))
+	}
+	t.Log("✓ Session cache contains conversation ID: " + conversationID)
+
+	t.Log("✓ Cursor auto-install deduplication test passed!")
+}

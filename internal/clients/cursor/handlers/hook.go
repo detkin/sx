@@ -95,7 +95,7 @@ type HooksConfig struct {
 func (h *HookHandler) updateHooksJSON(targetBase string) error {
 	hooksJSONPath := filepath.Join(targetBase, "hooks.json")
 
-	config, err := readHooksJSON(hooksJSONPath)
+	config, err := ReadHooksJSON(hooksJSONPath)
 	if err != nil {
 		return err
 	}
@@ -130,13 +130,13 @@ func (h *HookHandler) updateHooksJSON(targetBase string) error {
 	filtered = append(filtered, entry)
 	config.Hooks[cursorEvent] = filtered
 
-	return writeHooksJSON(hooksJSONPath, config)
+	return WriteHooksJSON(hooksJSONPath, config)
 }
 
 func (h *HookHandler) removeFromHooksJSON(targetBase string) error {
 	hooksJSONPath := filepath.Join(targetBase, "hooks.json")
 
-	config, err := readHooksJSON(hooksJSONPath)
+	config, err := ReadHooksJSON(hooksJSONPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil // Nothing to remove
@@ -155,10 +155,11 @@ func (h *HookHandler) removeFromHooksJSON(targetBase string) error {
 		config.Hooks[eventName] = filtered
 	}
 
-	return writeHooksJSON(hooksJSONPath, config)
+	return WriteHooksJSON(hooksJSONPath, config)
 }
 
-func readHooksJSON(path string) (*HooksConfig, error) {
+// ReadHooksJSON reads and parses the hooks.json file
+func ReadHooksJSON(path string) (*HooksConfig, error) {
 	config := &HooksConfig{
 		Version: 1,
 		Hooks:   make(map[string][]map[string]interface{}),
@@ -183,7 +184,8 @@ func readHooksJSON(path string) (*HooksConfig, error) {
 	return config, nil
 }
 
-func writeHooksJSON(path string, config *HooksConfig) error {
+// WriteHooksJSON writes the hooks config to the hooks.json file
+func WriteHooksJSON(path string, config *HooksConfig) error {
 	if err := utils.EnsureDir(filepath.Dir(path)); err != nil {
 		return err
 	}

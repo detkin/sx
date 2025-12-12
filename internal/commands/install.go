@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/sleuth-io/skills/internal/artifacts"
 	"github.com/sleuth-io/skills/internal/cache"
 	"github.com/sleuth-io/skills/internal/clients"
+	"github.com/sleuth-io/skills/internal/clients/cursor"
 	"github.com/sleuth-io/skills/internal/config"
 	"github.com/sleuth-io/skills/internal/constants"
 	"github.com/sleuth-io/skills/internal/gitutil"
@@ -27,6 +29,7 @@ import (
 // NewInstallCommand creates the install command
 func NewInstallCommand() *cobra.Command {
 	var hookMode bool
+	var clientID string
 
 	cmd := &cobra.Command{
 		Use:   "install",
@@ -34,23 +37,38 @@ func NewInstallCommand() *cobra.Command {
 		Long: fmt.Sprintf(`Read the %s file, fetch artifacts from the configured repository,
 and install them to ~/.claude/ directory.`, constants.SkillLockFile),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInstall(cmd, args, hookMode)
+			return runInstall(cmd, args, hookMode, clientID)
 		},
 	}
 
 	cmd.Flags().BoolVar(&hookMode, "hook-mode", false, "Run in hook mode (outputs JSON for Claude Code)")
+	cmd.Flags().StringVar(&clientID, "client", "", "Client ID that triggered the hook (used with --hook-mode)")
 	_ = cmd.Flags().MarkHidden("hook-mode") // Hide from help output since it's internal
+	_ = cmd.Flags().MarkHidden("client")    // Hide from help output since it's internal
 
 	return cmd
 }
 
 // runInstall executes the install command
-func runInstall(cmd *cobra.Command, args []string, hookMode bool) error {
+func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
+	log := logger.Get()
 	out := newOutputHelper(cmd)
 	out.silent = hookMode // Suppress normal output in hook mode
+
+	// When running in hook mode for Cursor, parse stdin to get workspace directory
+	// and chdir to it so git detection and scope logic work correctly
+	if hookMode && hookClientID == "cursor" {
+		if workspaceDir := cursor.ParseWorkspaceDir(); workspaceDir != "" {
+			if err := os.Chdir(workspaceDir); err != nil {
+				log.Warn("failed to chdir to workspace", "workspace", workspaceDir, "error", err)
+			} else {
+				log.Debug("changed to workspace directory", "workspace", workspaceDir)
+			}
+		}
+	}
 
 	// Load configuration
 	cfg, err := config.Load()
@@ -166,6 +184,35 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool) error {
 	out.printf("Detected clients: %s\n", strings.Join(clientNames, ", "))
 	out.println()
 
+	// In hook mode, check if the triggering client says to skip installation
+	// This is the fast path for clients like Cursor that fire hooks on every prompt
+	if hookMode && hookClientID != "" {
+		// Find the specific client that triggered the hook
+		hookClient, err := registry.Get(hookClientID)
+		if err == nil {
+			shouldInstall, err := hookClient.ShouldInstall(ctx)
+			if err != nil {
+				log := logger.Get()
+				log.Warn("ShouldInstall check failed", "client", hookClientID, "error", err)
+				// Continue on error
+			}
+			if !shouldInstall {
+				// Fast path - client says skip (e.g., already seen this conversation)
+				log := logger.Get()
+				log.Info("install skipped by client", "client", hookClientID, "reason", "already ran for this session")
+				response := map[string]interface{}{
+					"continue": true,
+				}
+				jsonBytes, err := json.MarshalIndent(response, "", "  ")
+				if err != nil {
+					return fmt.Errorf("failed to marshal JSON response: %w", err)
+				}
+				out.printlnAlways(string(jsonBytes))
+				return nil
+			}
+		}
+	}
+
 	// Filter artifacts by client compatibility and scope
 	var applicableArtifacts []*lockfile.Artifact
 	for i := range lockFile.Artifacts {
@@ -243,6 +290,10 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool) error {
 		// may not exist yet (e.g., running in a new repo with only global skills)
 		ensureSkillsSupport(ctx, targetClients, buildInstallScope(currentScope, gitContext), out)
 
+		// Log summary
+		log := logger.Get()
+		log.Info("install completed", "installed", 0, "total_up_to_date", len(sortedArtifacts))
+
 		// In hook mode, output JSON even when nothing changed
 		if hookMode {
 			response := map[string]interface{}{
@@ -316,7 +367,6 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool) error {
 	out.printf("✓ Installed %d artifacts successfully\n", len(installResult.Installed))
 
 	// Log successful installations
-	log := logger.Get()
 	for _, name := range installResult.Installed {
 		out.printf("  - %s\n", name)
 		// Find version for this artifact
@@ -340,6 +390,9 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool) error {
 
 	// Install client-specific hooks (e.g., auto-update, usage tracking)
 	installClientHooks(ctx, targetClients, out)
+
+	// Log summary
+	log.Info("install completed", "installed", len(installResult.Installed), "failed", len(installResult.Failed))
 
 	// If in hook mode and artifacts were installed, output JSON message
 	if hookMode && len(installResult.Installed) > 0 {

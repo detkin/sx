@@ -23,9 +23,28 @@ func init() {
 }
 
 func main() {
-	// Log command invocation
+	// Log command invocation with context
 	log := logger.Get()
-	log.Info("command invoked", "version", buildinfo.Version, "command", strings.Join(os.Args[1:], " "))
+	cwd, _ := os.Getwd()
+
+	// Extract --client flag if present (for hook mode context)
+	client := ""
+	for i, arg := range os.Args {
+		if strings.HasPrefix(arg, "--client=") {
+			client = strings.TrimPrefix(arg, "--client=")
+			break
+		}
+		if arg == "--client" && i+1 < len(os.Args) {
+			client = os.Args[i+1]
+			break
+		}
+	}
+
+	logArgs := []any{"version", buildinfo.Version, "command", strings.Join(os.Args[1:], " "), "cwd", cwd}
+	if client != "" {
+		logArgs = append(logArgs, "client", client)
+	}
+	log.Info("command invoked", logArgs...)
 
 	// Check for updates in the background (non-blocking, once per day)
 	// Skip if user is explicitly running the update command
