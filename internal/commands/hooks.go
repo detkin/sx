@@ -1,25 +1,22 @@
 package commands
 
 import (
-	"github.com/sleuth-io/skills/internal/claude"
+	"context"
+
+	"github.com/sleuth-io/skills/internal/clients"
+	"github.com/sleuth-io/skills/internal/logger"
 )
 
-// outputAdapter adapts outputHelper to claude.Output interface
-type outputAdapter struct {
-	out *outputHelper
-}
+// installAllClientHooks detects installed clients and installs hooks for each.
+func installAllClientHooks(ctx context.Context, out *outputHelper) {
+	log := logger.Get()
+	registry := clients.NewRegistry()
+	installedClients := registry.DetectInstalled()
 
-func (a *outputAdapter) Println(msg string) {
-	a.out.println(msg)
-}
-
-func (a *outputAdapter) PrintfErr(format string, args ...interface{}) {
-	a.out.printfErr(format, args...)
-}
-
-// installClaudeCodeHooks installs all Claude Code hooks (usage tracking and auto-update)
-func installClaudeCodeHooks(claudeDir string, out *outputHelper) error {
-	// Note: claudeDir parameter is ignored, we use claude.InstallHooks which gets it internally
-	adapter := &outputAdapter{out: out}
-	return claude.InstallHooks(adapter)
+	for _, client := range installedClients {
+		if err := client.InstallHooks(ctx); err != nil {
+			out.printfErr("Warning: failed to install hooks for %s: %v\n", client.DisplayName(), err)
+			log.Error("failed to install client hooks", "client", client.ID(), "error", err)
+		}
+	}
 }

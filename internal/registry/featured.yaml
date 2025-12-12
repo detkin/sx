@@ -1,0 +1,3 @@
+- name: docs-write
+  description: Write documentation following project standards
+  url: https://github.com/metabase/metabase/tree/master/.claude/skills/docs-write

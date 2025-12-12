@@ -11,10 +11,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/sleuth-io/skills/internal/config"
+	"github.com/sleuth-io/skills/internal/registry"
 )
 
 const (
-	defaultSleuthServerURL = "https://app.sleuth.io"
+	defaultSleuthServerURL = "https://skills.new"
 )
 
 // NewInitCommand creates the init command
@@ -65,11 +66,32 @@ func runInit(cmd *cobra.Command, args []string, repoType, serverURL, repoURL str
 	// Determine if we're in non-interactive mode
 	nonInteractive := repoType != ""
 
+	var err error
 	if nonInteractive {
-		return runInitNonInteractive(cmd, ctx, repoType, serverURL, repoURL)
+		err = runInitNonInteractive(cmd, ctx, repoType, serverURL, repoURL)
+	} else {
+		err = runInitInteractive(cmd, ctx)
 	}
 
-	return runInitInteractive(cmd, ctx)
+	if err != nil {
+		return err
+	}
+
+	// Post-init steps (hooks and featured skills)
+	runPostInit(cmd, ctx)
+
+	return nil
+}
+
+// runPostInit runs common steps after successful initialization
+func runPostInit(cmd *cobra.Command, ctx context.Context) {
+	out := newOutputHelper(cmd)
+
+	// Install hooks for all detected clients
+	installAllClientHooks(ctx, out)
+
+	// Offer to install featured skills
+	promptFeaturedSkills(cmd, ctx)
 }
 
 // runInitInteractive runs the init command in interactive mode
@@ -78,21 +100,51 @@ func runInitInteractive(cmd *cobra.Command, ctx context.Context) error {
 
 	out.println("Initialize Skills CLI")
 	out.println()
-	out.println("Choose repository type:")
-	out.println("  1) Local directory (default - easiest to get started)")
-	out.println("  2) Git repository")
-	out.println("  3) Sleuth server (OAuth authentication)")
+	out.println("How will you use skills?")
+	out.println("  1) Just for myself (default)")
+	out.println("  2) Share with my team")
 	out.println()
 
 	choice, _ := out.promptWithDefault("Enter choice", "1")
 
 	switch choice {
 	case "1", "":
-		return initPathRepository(cmd, ctx)
+		return initPersonalRepository(cmd, ctx)
+	case "2":
+		return initTeamRepository(cmd, ctx)
+	default:
+		return fmt.Errorf("invalid choice: %s", choice)
+	}
+}
+
+// initPersonalRepository sets up a local repository in ~/.config/skills/repository
+func initPersonalRepository(cmd *cobra.Command, ctx context.Context) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	repoPath := filepath.Join(home, ".config", "skills", "repository")
+	return configurePathRepo(cmd, ctx, repoPath)
+}
+
+// initTeamRepository prompts for team repository options (git or sleuth)
+func initTeamRepository(cmd *cobra.Command, ctx context.Context) error {
+	out := newOutputHelper(cmd)
+
+	out.println()
+	out.println("Choose how to share with your team:")
+	out.println("  1) Sleuth (default)")
+	out.println("  2) Git repository")
+	out.println()
+
+	choice, _ := out.promptWithDefault("Enter choice", "1")
+
+	switch choice {
+	case "1", "":
+		return initSleuthServer(cmd, ctx)
 	case "2":
 		return initGitRepository(cmd, ctx)
-	case "3":
-		return initSleuthServer(cmd, ctx)
 	default:
 		return fmt.Errorf("invalid choice: %s", choice)
 	}
@@ -190,11 +242,6 @@ func authenticateSleuth(cmd *cobra.Command, ctx context.Context, serverURL strin
 	out.println("✓ Authentication successful!")
 	out.println("Configuration saved.")
 
-	// Install Claude Code hooks
-	if err := installClaudeCodeHooks("", out); err != nil {
-		out.printfErr("\nWarning: failed to install Claude Code hooks: %v\n", err)
-	}
-
 	return nil
 }
 
@@ -233,34 +280,7 @@ func configureGitRepo(cmd *cobra.Command, ctx context.Context, repoURL string) e
 	out.println("✓ Configuration saved!")
 	out.println("Git repository:", repoURL)
 
-	// Install Claude Code hooks
-	if err := installClaudeCodeHooks("", out); err != nil {
-		out.printfErr("\nWarning: failed to install Claude Code hooks: %v\n", err)
-	}
-
 	return nil
-}
-
-// initPathRepository initializes local path repository configuration
-func initPathRepository(cmd *cobra.Command, ctx context.Context) error {
-	out := newOutputHelper(cmd)
-
-	out.println()
-	out.println("Enter path to local skills repository directory.")
-	out.println("This can be:")
-	out.println("  - Relative path (./skills)")
-	out.println("  - Absolute path (/home/user/skills)")
-	out.println("  - Tilde path (~/skills)")
-	out.println("  - file:// URL (file:///home/user/skills)")
-	out.println()
-
-	repoPath, _ := out.promptWithDefault("Repository path", "./skills")
-
-	if repoPath == "" {
-		return fmt.Errorf("repository path is required")
-	}
-
-	return configurePathRepo(cmd, ctx, repoPath)
 }
 
 // configurePathRepo configures a local path repository
@@ -319,11 +339,6 @@ func configurePathRepo(cmd *cobra.Command, ctx context.Context, repoPath string)
 	out.println()
 	out.println("✓ Configuration saved!")
 
-	// Install Claude Code hooks
-	if err := installClaudeCodeHooks("", out); err != nil {
-		out.printfErr("\nWarning: failed to install Claude Code hooks: %v\n", err)
-	}
-
 	return nil
 }
 
@@ -345,4 +360,56 @@ func expandPath(path string) (string, error) {
 	}
 
 	return absPath, nil
+}
+
+// promptFeaturedSkills offers to install featured skills after init
+func promptFeaturedSkills(cmd *cobra.Command, ctx context.Context) {
+	out := newOutputHelper(cmd)
+
+	skills, err := registry.FeaturedSkills()
+	if err != nil || len(skills) == 0 {
+		return
+	}
+
+	var addedAny bool
+	for {
+		out.println()
+		out.println("Would you like to install a featured skill?")
+		out.println()
+
+		for i, skill := range skills {
+			out.printf("  %d) %s - %s\n", i+1, skill.Name, skill.Description)
+		}
+		out.println("  0) Done")
+		out.println()
+
+		choice, _ := out.promptWithDefault("Enter choice", "0")
+
+		if choice == "0" || choice == "" {
+			break
+		}
+
+		// Parse choice
+		var idx int
+		if _, err := fmt.Sscanf(choice, "%d", &idx); err != nil || idx < 1 || idx > len(skills) {
+			out.println("Invalid choice")
+			continue
+		}
+
+		skill := skills[idx-1]
+		out.println()
+		out.printf("Adding %s...\n", skill.Name)
+
+		// Run the add command with the skill URL (skip install prompt, we'll do it at the end)
+		if err := runAddSkipInstall(cmd, skill.URL); err != nil {
+			out.printfErr("Failed to add skill: %v\n", err)
+		} else {
+			addedAny = true
+		}
+	}
+
+	// If any skills were added, prompt to install once
+	if addedAny {
+		promptRunInstall(cmd, ctx, out)
+	}
 }

@@ -74,16 +74,7 @@ prompt-file = "SKILL.md"
 
 	// Step 1: Initialize with path repository
 	t.Log("Step 1: Initialize with path repository")
-
-	// Use init command interactively with mock prompter
-	initPrompter := NewMockPrompter().
-		ExpectPrompt("Enter choice", "1").       // Choose path repository (option 1)
-		ExpectPrompt("Repository path", repoDir) // Enter repo path
-
-	initCmd := NewInitCommand()
-	if err := ExecuteWithPrompter(initCmd, initPrompter); err != nil {
-		t.Fatalf("Failed to initialize: %v", err)
-	}
+	InitPathRepo(t, repoDir)
 
 	// Verify repo directory was created by init
 	if _, err := os.Stat(repoDir); os.IsNotExist(err) {
@@ -301,15 +292,7 @@ args = [
 
 	// Step 1: Initialize with path repository
 	t.Log("Step 1: Initialize with path repository")
-
-	initPrompter := NewMockPrompter().
-		ExpectPrompt("Enter choice", "1").
-		ExpectPrompt("Repository path", repoDir)
-
-	initCmd := NewInitCommand()
-	if err := ExecuteWithPrompter(initCmd, initPrompter); err != nil {
-		t.Fatalf("Failed to initialize: %v", err)
-	}
+	InitPathRepo(t, repoDir)
 
 	// Step 2: Add the test MCP to the repository
 	t.Log("Step 2: Add test MCP to repository")
@@ -436,15 +419,7 @@ exit 0
 
 	// Step 1: Initialize with path repository
 	t.Log("Step 1: Initialize with path repository")
-
-	initPrompter := NewMockPrompter().
-		ExpectPrompt("Enter choice", "1").
-		ExpectPrompt("Repository path", repoDir)
-
-	initCmd := NewInitCommand()
-	if err := ExecuteWithPrompter(initCmd, initPrompter); err != nil {
-		t.Fatalf("Failed to initialize: %v", err)
-	}
+	InitPathRepo(t, repoDir)
 
 	// Step 2: Add the test hook to the repository
 	t.Log("Step 2: Add test hook to repository")
@@ -599,14 +574,7 @@ prompt-file = "SKILL.md"
 
 	// Initialize and add skill
 	t.Log("Step 1: Initialize repository and add skill")
-	initPrompter := NewMockPrompter().
-		ExpectPrompt("Enter choice", "1").
-		ExpectPrompt("Repository path", repoDir)
-
-	initCmd := NewInitCommand()
-	if err := ExecuteWithPrompter(initCmd, initPrompter); err != nil {
-		t.Fatalf("Failed to initialize: %v", err)
-	}
+	InitPathRepo(t, repoDir)
 
 	addPrompter := NewMockPrompter().
 		ExpectConfirm("correct", true).

@@ -109,3 +109,15 @@ func ExecuteWithPrompter(cmd *cobra.Command, prompter *MockPrompter) error {
 
 	return prompter.AssertAllUsed()
 }
+
+// InitPathRepo initializes a path repository for testing using non-interactive mode.
+// This is a helper for tests that need to set up a repo without interactive prompts.
+func InitPathRepo(t interface {
+	Fatalf(format string, args ...any)
+}, repoDir string) {
+	initCmd := NewInitCommand()
+	initCmd.SetArgs([]string{"--type=path", "--repo-url=" + repoDir})
+	if err := initCmd.Execute(); err != nil {
+		t.Fatalf("Failed to initialize: %v", err)
+	}
+}

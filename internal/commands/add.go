@@ -18,6 +18,7 @@ import (
 	"github.com/sleuth-io/skills/internal/buildinfo"
 	"github.com/sleuth-io/skills/internal/config"
 	"github.com/sleuth-io/skills/internal/constants"
+	"github.com/sleuth-io/skills/internal/github"
 	"github.com/sleuth-io/skills/internal/lockfile"
 	"github.com/sleuth-io/skills/internal/metadata"
 	"github.com/sleuth-io/skills/internal/repository"
@@ -27,10 +28,16 @@ import (
 // NewAddCommand creates the add command
 func NewAddCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "add [zip-file-directory-or-url]",
-		Short: "Add a zip file, directory, or URL artifact to the repository",
-		Long: `Take a local zip file, directory, or URL to a zip file, detect metadata from its
-contents, prompt for confirmation/edits, install it to the repository, and update the lock file.`,
+		Use:   "add [source-or-artifact-name]",
+		Short: "Add an artifact or configure an existing one",
+		Long: `Add an artifact from a local zip file, directory, URL, or GitHub path.
+If the argument is an existing artifact name, configure its installation scope instead.
+
+Examples:
+  skills add ./my-skill           # Add from local directory
+  skills add https://...          # Add from URL
+  skills add https://github.com/owner/repo/tree/main/path  # Add from GitHub
+  skills add my-skill             # Configure scope for existing artifact`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var zipFile string
@@ -46,13 +53,31 @@ contents, prompt for confirmation/edits, install it to the repository, and updat
 
 // runAdd executes the add command
 func runAdd(cmd *cobra.Command, zipFile string) error {
+	return runAddWithOptions(cmd, zipFile, true)
+}
+
+// runAddSkipInstall executes the add command without prompting to install
+func runAddSkipInstall(cmd *cobra.Command, zipFile string) error {
+	return runAddWithOptions(cmd, zipFile, false)
+}
+
+// runAddWithOptions executes the add command with configurable options
+func runAddWithOptions(cmd *cobra.Command, input string, promptInstall bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	out := newOutputHelper(cmd)
 
+	// Check if input is an existing artifact name (not a file, directory, or URL)
+	if input != "" && !isURL(input) && !github.IsTreeURL(input) {
+		if _, err := os.Stat(input); os.IsNotExist(err) {
+			// Not a file/directory - check if it's an existing artifact
+			return configureExistingArtifact(ctx, cmd, out, input, promptInstall)
+		}
+	}
+
 	// Get and validate zip file
-	zipFile, zipData, err := loadZipFile(out, zipFile)
+	zipFile, zipData, err := loadZipFile(out, input)
 	if err != nil {
 		return err
 	}
@@ -76,12 +101,105 @@ func runAdd(cmd *cobra.Command, zipFile string) error {
 	}
 
 	// Handle identical content case
+	var addErr error
 	if contentsIdentical {
-		return handleIdenticalArtifact(ctx, out, repo, name, version, artifactType)
+		addErr = handleIdenticalArtifact(ctx, out, repo, name, version, artifactType)
+	} else {
+		// Add new or updated artifact
+		addErr = addNewArtifact(ctx, out, repo, name, artifactType, version, zipFile, zipData, metadataExists)
 	}
 
-	// Add new or updated artifact
-	return addNewArtifact(ctx, out, repo, name, artifactType, version, zipFile, zipData, metadataExists)
+	if addErr != nil {
+		return addErr
+	}
+
+	// Prompt to run install (if enabled)
+	if promptInstall {
+		promptRunInstall(cmd, ctx, out)
+	}
+
+	return nil
+}
+
+// configureExistingArtifact handles configuring scope for an artifact that already exists in the repository
+func configureExistingArtifact(ctx context.Context, cmd *cobra.Command, out *outputHelper, artifactName string, promptInstall bool) error {
+	// Create repository instance
+	repo, err := createRepository()
+	if err != nil {
+		return err
+	}
+
+	// Load lock file to find the artifact
+	lockFileContent, _, _, err := repo.GetLockFile(ctx, "")
+	if err != nil {
+		return fmt.Errorf("failed to fetch lock file: %w", err)
+	}
+
+	lockFile, err := lockfile.Parse(lockFileContent)
+	if err != nil {
+		return fmt.Errorf("failed to parse lock file: %w", err)
+	}
+
+	// Find the artifact
+	var foundArtifact *lockfile.Artifact
+	for i := range lockFile.Artifacts {
+		if lockFile.Artifacts[i].Name == artifactName {
+			foundArtifact = &lockFile.Artifacts[i]
+			break
+		}
+	}
+
+	if foundArtifact == nil {
+		return fmt.Errorf("artifact '%s' not found in repository", artifactName)
+	}
+
+	out.printf("Configuring scope for %s@%s\n", foundArtifact.Name, foundArtifact.Version)
+
+	// Prompt for repository configurations
+	repositories, err := promptForRepositories(out, foundArtifact.Name, foundArtifact.Version)
+	if err != nil {
+		return fmt.Errorf("failed to configure repositories: %w", err)
+	}
+
+	// If nil, user chose not to install
+	if repositories == nil {
+		return nil
+	}
+
+	// Update artifact with new repositories
+	foundArtifact.Repositories = repositories
+
+	// Update lock file
+	if err := updateLockFile(ctx, out, repo, foundArtifact); err != nil {
+		return fmt.Errorf("failed to update lock file: %w", err)
+	}
+
+	// Prompt to run install (if enabled)
+	if promptInstall {
+		promptRunInstall(cmd, ctx, out)
+	}
+
+	return nil
+}
+
+// promptRunInstall asks if the user wants to run install after adding an artifact
+func promptRunInstall(cmd *cobra.Command, ctx context.Context, out *outputHelper) {
+	out.println()
+	response, err := out.prompt("Run install now to activate the artifact? (Y/n): ")
+	if err != nil {
+		return
+	}
+
+	response = strings.ToLower(strings.TrimSpace(response))
+	if response == "n" || response == "no" {
+		out.println("Run 'skills install' when ready to activate.")
+		return
+	}
+
+	out.println()
+	if err := runInstall(cmd, nil, false, ""); err != nil {
+		out.printfErr("Install failed: %v\n", err)
+	}
 }
 
 // isURL checks if the input looks like a URL
@@ -104,7 +222,21 @@ func loadZipFile(out *outputHelper, zipFile string) (string, []byte, error) {
 		return "", nil, fmt.Errorf("zip file, directory path, or URL is required")
 	}
 
-	// Check if it's a URL
+	// Check if it's a GitHub tree URL (directory)
+	if github.IsTreeURL(zipFile) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		out.println()
+		out.println("Downloading from GitHub directory...")
+		zipData, err := downloadFromGitHub(ctx, out, zipFile)
+		if err != nil {
+			return "", nil, err
+		}
+		return zipFile, zipData, nil
+	}
+
+	// Check if it's a regular URL (zip file)
 	if isURL(zipFile) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
@@ -195,6 +327,30 @@ func downloadZipFromURL(ctx context.Context, out *outputHelper, zipURL string) (
 
 	out.printf("Downloaded %d bytes\n", len(data))
 	return data, nil
+}
+
+// downloadFromGitHub downloads files from a GitHub directory URL and returns them as a zip.
+func downloadFromGitHub(ctx context.Context, out *outputHelper, gitHubURL string) ([]byte, error) {
+	treeURL := github.ParseTreeURL(gitHubURL)
+	if treeURL == nil {
+		return nil, fmt.Errorf("invalid GitHub directory URL: %s", gitHubURL)
+	}
+
+	out.printf("Repository: %s/%s\n", treeURL.Owner, treeURL.Repo)
+	out.printf("Branch/Tag: %s\n", treeURL.Ref)
+	if treeURL.Path != "" {
+		out.printf("Path: %s\n", treeURL.Path)
+	}
+	out.println()
+
+	fetcher := github.NewFetcher()
+	zipData, err := fetcher.FetchDirectory(ctx, treeURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download from GitHub: %w", err)
+	}
+
+	out.printf("Downloaded %d bytes\n", len(zipData))
+	return zipData, nil
 }
 
 // detectArtifactInfo extracts or detects artifact name and type, then confirms with user
@@ -537,6 +693,11 @@ func updateMetadataInZip(meta *metadata.Metadata, zipData []byte, metadataExists
 
 // guessArtifactName extracts a reasonable artifact name from the zip file path or URL
 func guessArtifactName(zipPath string) string {
+	// Handle GitHub tree URLs specially
+	if treeURL := github.ParseTreeURL(zipPath); treeURL != nil {
+		return treeURL.SkillName()
+	}
+
 	// Handle URLs - extract path component
 	if isURL(zipPath) {
 		if parsed, err := url.Parse(zipPath); err == nil {
