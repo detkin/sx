@@ -12,6 +12,8 @@ import (
 
 	"github.com/sleuth-io/skills/internal/config"
 	"github.com/sleuth-io/skills/internal/registry"
+	"github.com/sleuth-io/skills/internal/ui"
+	"github.com/sleuth-io/skills/internal/ui/components"
 )
 
 const (
@@ -51,14 +53,13 @@ func runInit(cmd *cobra.Command, args []string, repoType, serverURL, repoURL str
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	out := newOutputHelper(cmd)
+	styledOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
 
 	// Check if config already exists
 	if config.Exists() {
-		out.printErr("Configuration already exists.")
-		response, _ := out.prompt("Overwrite existing configuration? (y/N): ")
-		response = strings.ToLower(response)
-		if response != "y" && response != "yes" {
+		styledOut.Warning("Configuration already exists.")
+		confirmed, err := components.Confirm("Overwrite existing configuration?", false)
+		if err != nil || !confirmed {
 			return fmt.Errorf("initialization cancelled")
 		}
 	}
@@ -96,24 +97,28 @@ func runPostInit(cmd *cobra.Command, ctx context.Context) {
 
 // runInitInteractive runs the init command in interactive mode
 func runInitInteractive(cmd *cobra.Command, ctx context.Context) error {
-	out := newOutputHelper(cmd)
+	styledOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
 
-	out.println("Initialize Skills CLI")
-	out.println()
-	out.println("How will you use skills?")
-	out.println("  1) Just for myself (default)")
-	out.println("  2) Share with my team")
-	out.println()
+	styledOut.Header("Initialize Skills CLI")
+	styledOut.Newline()
 
-	choice, _ := out.promptWithDefault("Enter choice", "1")
+	options := []components.Option{
+		{Label: "Just for myself", Value: "personal", Description: "Local repository"},
+		{Label: "Share with my team", Value: "team", Description: "Git or Sleuth server"},
+	}
 
-	switch choice {
-	case "1", "":
+	selected, err := components.SelectWithDefault("How will you use skills?", options, 0)
+	if err != nil {
+		return err
+	}
+
+	switch selected.Value {
+	case "personal":
 		return initPersonalRepository(cmd, ctx)
-	case "2":
+	case "team":
 		return initTeamRepository(cmd, ctx)
 	default:
-		return fmt.Errorf("invalid choice: %s", choice)
+		return fmt.Errorf("invalid choice: %s", selected.Value)
 	}
 }
 
@@ -130,23 +135,23 @@ func initPersonalRepository(cmd *cobra.Command, ctx context.Context) error {
 
 // initTeamRepository prompts for team repository options (git or sleuth)
 func initTeamRepository(cmd *cobra.Command, ctx context.Context) error {
-	out := newOutputHelper(cmd)
+	options := []components.Option{
+		{Label: "Sleuth", Value: "sleuth", Description: "Managed skills platform"},
+		{Label: "Git repository", Value: "git", Description: "Self-hosted Git repo"},
+	}
 
-	out.println()
-	out.println("Choose how to share with your team:")
-	out.println("  1) Sleuth (default)")
-	out.println("  2) Git repository")
-	out.println()
+	selected, err := components.SelectWithDefault("Choose how to share with your team:", options, 0)
+	if err != nil {
+		return err
+	}
 
-	choice, _ := out.promptWithDefault("Enter choice", "1")
-
-	switch choice {
-	case "1", "":
+	switch selected.Value {
+	case "sleuth":
 		return initSleuthServer(cmd, ctx)
-	case "2":
+	case "git":
 		return initGitRepository(cmd, ctx)
 	default:
-		return fmt.Errorf("invalid choice: %s", choice)
+		return fmt.Errorf("invalid choice: %s", selected.Value)
 	}
 }
 
@@ -178,21 +183,24 @@ func runInitNonInteractive(cmd *cobra.Command, ctx context.Context, repoType, se
 
 // initSleuthServer initializes Sleuth server configuration
 func initSleuthServer(cmd *cobra.Command, ctx context.Context) error {
-	out := newOutputHelper(cmd)
+	styledOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
+	styledOut.Newline()
 
-	out.println()
-	serverURL, _ := out.promptWithDefault("Enter Sleuth server URL", defaultSleuthServerURL)
+	serverURL, err := components.InputWithDefault("Enter Sleuth server URL", defaultSleuthServerURL)
+	if err != nil {
+		return err
+	}
 
 	return authenticateSleuth(cmd, ctx, serverURL)
 }
 
 // authenticateSleuth performs OAuth authentication with Sleuth server
 func authenticateSleuth(cmd *cobra.Command, ctx context.Context, serverURL string) error {
-	out := newOutputHelper(cmd)
+	styledOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
 
-	out.println()
-	out.println("Authenticating with Sleuth server...")
-	out.println()
+	styledOut.Newline()
+	styledOut.Muted("Authenticating with Sleuth server...")
+	styledOut.Newline()
 
 	// Start OAuth device code flow
 	oauthClient := config.NewOAuthClient(serverURL)
@@ -202,12 +210,12 @@ func authenticateSleuth(cmd *cobra.Command, ctx context.Context, serverURL strin
 	}
 
 	// Display instructions
-	out.println("To authenticate, please visit:")
-	out.println()
-	out.printf("  %s\n", deviceResp.VerificationURI)
-	out.println()
-	out.printf("And enter code: %s\n", deviceResp.UserCode)
-	out.println()
+	styledOut.Println("To authenticate, please visit:")
+	styledOut.Newline()
+	styledOut.Printf("  %s\n", styledOut.EmphasisText(deviceResp.VerificationURI))
+	styledOut.Newline()
+	styledOut.Printf("And enter code: %s\n", styledOut.BoldText(deviceResp.UserCode))
+	styledOut.Newline()
 
 	// Try to open browser
 	browserURL := deviceResp.VerificationURIComplete
@@ -215,14 +223,15 @@ func authenticateSleuth(cmd *cobra.Command, ctx context.Context, serverURL strin
 		browserURL = deviceResp.VerificationURI
 	}
 	if err := config.OpenBrowser(browserURL); err == nil {
-		out.println("(Browser opened automatically)")
+		styledOut.Muted("(Browser opened automatically)")
 	}
 
-	out.println()
-	out.println("Waiting for authorization...")
+	styledOut.Newline()
 
-	// Poll for token
-	tokenResp, err := oauthClient.PollForToken(ctx, deviceResp.DeviceCode)
+	// Poll for token with spinner
+	tokenResp, err := components.RunWithSpinner("Waiting for authorization", func() (*config.OAuthTokenResponse, error) {
+		return oauthClient.PollForToken(ctx, deviceResp.DeviceCode)
+	})
 	if err != nil {
 		return fmt.Errorf("authentication failed: %w", err)
 	}
@@ -238,19 +247,22 @@ func authenticateSleuth(cmd *cobra.Command, ctx context.Context, serverURL strin
 		return fmt.Errorf("failed to save configuration: %w", err)
 	}
 
-	out.println()
-	out.println("✓ Authentication successful!")
-	out.println("Configuration saved.")
+	styledOut.Newline()
+	styledOut.Success("Authentication successful!")
+	styledOut.Muted("Configuration saved.")
 
 	return nil
 }
 
 // initGitRepository initializes Git repository configuration
 func initGitRepository(cmd *cobra.Command, ctx context.Context) error {
-	out := newOutputHelper(cmd)
+	styledOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
+	styledOut.Newline()
 
-	out.println()
-	repoURL, _ := out.prompt("Enter Git repository URL: ")
+	repoURL, err := components.Input("Enter Git repository URL")
+	if err != nil {
+		return err
+	}
 
 	if repoURL == "" {
 		return fmt.Errorf("repository URL is required")
@@ -261,10 +273,10 @@ func initGitRepository(cmd *cobra.Command, ctx context.Context) error {
 
 // configureGitRepo configures a Git repository
 func configureGitRepo(cmd *cobra.Command, ctx context.Context, repoURL string) error {
-	out := newOutputHelper(cmd)
+	styledOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
 
-	out.println()
-	out.println("Configuring Git repository...")
+	styledOut.Newline()
+	styledOut.Muted("Configuring Git repository...")
 
 	// Save configuration
 	cfg := &config.Config{
@@ -276,19 +288,16 @@ func configureGitRepo(cmd *cobra.Command, ctx context.Context, repoURL string) e
 		return fmt.Errorf("failed to save configuration: %w", err)
 	}
 
-	out.println()
-	out.println("✓ Configuration saved!")
-	out.println("Git repository:", repoURL)
+	styledOut.Newline()
+	styledOut.Success("Configuration saved!")
+	styledOut.KeyValue("Git repository", repoURL)
 
 	return nil
 }
 
 // configurePathRepo configures a local path repository
 func configurePathRepo(cmd *cobra.Command, ctx context.Context, repoPath string) error {
-	out := newOutputHelper(cmd)
-
-	out.println()
-	out.println("Configuring local repository...")
+	styledOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
 
 	// Convert path to absolute path first
 	var absPath string
@@ -308,36 +317,25 @@ func configurePathRepo(cmd *cobra.Command, ctx context.Context, repoPath string)
 		}
 	}
 
-	// Show the absolute path that will be used
-	out.println()
-	out.printf("Repository directory: %s\n", absPath)
-
-	// Check if directory exists, create if needed
+	// Create directory if needed
 	if _, err := os.Stat(absPath); os.IsNotExist(err) {
-		out.println("Directory does not exist, creating...")
 		if err := os.MkdirAll(absPath, 0755); err != nil {
 			return fmt.Errorf("failed to create directory: %w", err)
 		}
-		out.println("✓ Directory created")
-	} else {
-		out.println("✓ Directory exists")
 	}
-
-	// Convert to file:// URL
-	repoURL := "file://" + absPath
 
 	// Save configuration
 	cfg := &config.Config{
 		Type:          config.RepositoryTypePath,
-		RepositoryURL: repoURL,
+		RepositoryURL: "file://" + absPath,
 	}
 
 	if err := config.Save(cfg); err != nil {
 		return fmt.Errorf("failed to save configuration: %w", err)
 	}
 
-	out.println()
-	out.println("✓ Configuration saved!")
+	styledOut.Newline()
+	styledOut.Success("Configuration saved!")
 
 	return nil
 }
@@ -364,7 +362,7 @@ func expandPath(path string) (string, error) {
 
 // promptFeaturedSkills offers to install featured skills after init
 func promptFeaturedSkills(cmd *cobra.Command, ctx context.Context) {
-	out := newOutputHelper(cmd)
+	styledOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
 
 	skills, err := registry.FeaturedSkills()
 	if err != nil || len(skills) == 0 {
@@ -373,36 +371,33 @@ func promptFeaturedSkills(cmd *cobra.Command, ctx context.Context) {
 
 	var addedAny bool
 	for {
-		out.println()
-		out.println("Would you like to install a featured skill?")
-		out.println()
+		styledOut.Newline()
 
-		for i, skill := range skills {
-			out.printf("  %d) %s - %s\n", i+1, skill.Name, skill.Description)
+		// Build options with continue at the top, then skills
+		options := make([]components.Option, len(skills)+1)
+		options[0] = components.Option{
+			Label: "Continue",
+			Value: "continue",
 		}
-		out.println("  0) Done")
-		out.println()
+		for i, skill := range skills {
+			options[i+1] = components.Option{
+				Label:       skill.Name,
+				Value:       skill.URL,
+				Description: skill.Description,
+			}
+		}
 
-		choice, _ := out.promptWithDefault("Enter choice", "0")
-
-		if choice == "0" || choice == "" {
+		selected, err := components.SelectWithDefault("Would you like to install a featured skill?", options, 0)
+		if err != nil || selected.Value == "continue" {
 			break
 		}
 
-		// Parse choice
-		var idx int
-		if _, err := fmt.Sscanf(choice, "%d", &idx); err != nil || idx < 1 || idx > len(skills) {
-			out.println("Invalid choice")
-			continue
-		}
-
-		skill := skills[idx-1]
-		out.println()
-		out.printf("Adding %s...\n", skill.Name)
+		styledOut.Newline()
+		styledOut.Muted(fmt.Sprintf("Adding %s...", selected.Label))
 
 		// Run the add command with the skill URL (skip install prompt, we'll do it at the end)
-		if err := runAddSkipInstall(cmd, skill.URL); err != nil {
-			out.printfErr("Failed to add skill: %v\n", err)
+		if err := runAddSkipInstall(cmd, selected.Value); err != nil {
+			styledOut.Error(fmt.Sprintf("Failed to add skill: %v", err))
 		} else {
 			addedAny = true
 		}
@@ -410,6 +405,7 @@ func promptFeaturedSkills(cmd *cobra.Command, ctx context.Context) {
 
 	// If any skills were added, prompt to install once
 	if addedAny {
+		out := newOutputHelper(cmd)
 		promptRunInstall(cmd, ctx, out)
 	}
 }

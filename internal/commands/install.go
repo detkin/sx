@@ -22,6 +22,8 @@ import (
 	"github.com/sleuth-io/skills/internal/logger"
 	"github.com/sleuth-io/skills/internal/repository"
 	"github.com/sleuth-io/skills/internal/scope"
+	"github.com/sleuth-io/skills/internal/ui"
+	"github.com/sleuth-io/skills/internal/ui/components"
 )
 
 // NewInstallCommand creates the install command
@@ -55,8 +57,16 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID s
 	defer cancel()
 
 	log := logger.Get()
+	styledOut := ui.NewOutput(cmd.OutOrStdout(), cmd.ErrOrStderr())
+	styledOut.SetSilent(hookMode) // Suppress normal output in hook mode
+
+	// Status line for transient updates
+	status := components.NewStatus(cmd.OutOrStdout())
+	status.SetSilent(hookMode)
+
+	// Keep old outputHelper for functions that still use it (will migrate incrementally)
 	out := newOutputHelper(cmd)
-	out.silent = hookMode // Suppress normal output in hook mode
+	out.silent = hookMode
 
 	// When running in hook mode for Cursor, parse stdin to get workspace directory
 	// and chdir to it so git detection and scope logic work correctly
@@ -87,20 +97,21 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID s
 		return fmt.Errorf("failed to create repository: %w", err)
 	}
 
-	// Fetch lock file with ETag caching
-	out.println("Fetching lock file...")
+	// Fetch lock file with spinner
+	status.Start("Fetching lock file")
 
 	cachedETag, _ := cache.LoadETag(cfg.RepositoryURL)
 
 	lockFileData, newETag, notModified, err := repo.GetLockFile(ctx, cachedETag)
 	if err != nil {
+		status.Fail("Failed to fetch lock file")
 		return fmt.Errorf("failed to fetch lock file: %w", err)
 	}
 
 	if notModified {
-		out.println("Lock file unchanged (using cached version)")
 		lockFileData, err = cache.LoadLockFile(cfg.RepositoryURL)
 		if err != nil {
+			status.Fail("Failed to load cached lock file")
 			return fmt.Errorf("failed to load cached lock file: %w", err)
 		}
 	} else {
@@ -119,21 +130,23 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID s
 	// Parse lock file
 	lockFile, err := lockfile.Parse(lockFileData)
 	if err != nil {
+		status.Fail("Failed to parse lock file")
 		return fmt.Errorf("failed to parse lock file: %w", err)
 	}
 
 	// Validate lock file
 	if err := lockFile.Validate(); err != nil {
+		status.Fail("Lock file validation failed")
 		return fmt.Errorf("lock file validation failed: %w", err)
 	}
 
-	out.printf("Lock file version: %s (created by %s)\n", lockFile.LockVersion, lockFile.CreatedBy)
-	out.printf("Found %d artifacts\n", len(lockFile.Artifacts))
-	out.println()
+	status.Clear() // Clear the spinner, no permanent message needed
 
-	// Detect Git context
+	// Detect Git context (transient)
+	status.Start("Detecting context")
 	gitContext, err := gitutil.DetectContext(ctx)
 	if err != nil {
+		status.Fail("Failed to detect git context")
 		return fmt.Errorf("failed to detect git context: %w", err)
 	}
 
@@ -153,14 +166,11 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID s
 				RepoPath: gitContext.RelativePath,
 			}
 		}
-		out.printf("Git context: %s (path: %s)\n", gitContext.RepoURL, gitContext.RelativePath)
 	} else {
 		currentScope = &scope.Scope{
 			Type: "global",
 		}
-		out.println("Git context: not in a repository (global scope)")
 	}
-	out.println()
 
 	matcherScope := scope.NewMatcher(currentScope)
 
@@ -168,16 +178,11 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID s
 	registry := clients.Global()
 	targetClients := registry.DetectInstalled()
 	if len(targetClients) == 0 {
+		status.Fail("No AI coding clients detected")
 		return fmt.Errorf("no AI coding clients detected")
 	}
 
-	// Display detected clients
-	clientNames := make([]string, len(targetClients))
-	for i, client := range targetClients {
-		clientNames[i] = client.DisplayName()
-	}
-	out.printf("Detected clients: %s\n", strings.Join(clientNames, ", "))
-	out.println()
+	status.Clear() // Clear status, we'll show summary at end
 
 	// In hook mode, check if the triggering client says to skip installation
 	// This is the fast path for clients like Cursor that fire hooks on every prompt
@@ -229,11 +234,8 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID s
 		}
 	}
 
-	out.printf("Found %d artifacts matching current scope\n", len(applicableArtifacts))
-	out.println()
-
 	if len(applicableArtifacts) == 0 {
-		out.println("No artifacts to install.")
+		styledOut.Muted("No artifacts to install.")
 		return nil
 	}
 
@@ -243,9 +245,6 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID s
 	if err != nil {
 		return fmt.Errorf("dependency resolution failed: %w", err)
 	}
-
-	out.printf("Resolved %d artifacts (including dependencies)\n", len(sortedArtifacts))
-	out.println()
 
 	// Load tracker
 	tracker := loadTracker(out)
@@ -292,18 +291,16 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID s
 			if err != nil {
 				return fmt.Errorf("failed to marshal JSON response: %w", err)
 			}
-			out.printlnAlways(string(jsonBytes))
+			styledOut.PrintlnAlways(string(jsonBytes))
 		} else {
-			out.println("\n✓ No changes needed")
+			styledOut.Success("All skills up to date")
 		}
 
 		return nil
 	}
 
-	out.println()
-
 	// Download only the artifacts that need to be installed
-	out.println("Downloading artifacts...")
+	status.Start(fmt.Sprintf("Downloading %d artifacts", len(artifactsToInstall)))
 	fetcher := artifacts.NewArtifactFetcher(repo)
 	results, err := fetcher.FetchArtifacts(ctx, artifactsToInstall, 10)
 	if err != nil {
@@ -325,20 +322,18 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID s
 		}
 	}
 
+	status.Clear()
+
 	if len(downloadErrors) > 0 {
-		out.printErr("\nDownload errors:")
 		log := logger.Get()
 		for _, err := range downloadErrors {
-			out.printfErr("  - %v\n", err)
+			styledOut.ErrorItem(err.Error())
 			log.Error("artifact download failed", "error", err)
 		}
-		out.println()
 	}
 
-	out.printf("Downloaded %d/%d artifacts successfully\n", len(successfulDownloads), len(artifactsToInstall))
-	out.println()
-
 	if len(successfulDownloads) == 0 {
+		styledOut.Error("No artifacts downloaded successfully")
 		return fmt.Errorf("no artifacts downloaded successfully")
 	}
 
@@ -351,27 +346,25 @@ func runInstall(cmd *cobra.Command, args []string, hookMode bool, hookClientID s
 	// Ensure skills support is configured for all clients (creates local rules files, etc.)
 	ensureSkillsSupport(ctx, targetClients, buildInstallScope(currentScope, gitContext), out)
 
-	// Report results
-	out.println()
-	out.printf("✓ Installed %d artifacts successfully\n", len(installResult.Installed))
-
-	// Log successful installations
-	for _, name := range installResult.Installed {
-		out.printf("  - %s\n", name)
-		// Find version for this artifact
-		for _, art := range successfulDownloads {
-			if art.Artifact.Name == name {
-				log.Info("artifact installed", "name", name, "version", art.Artifact.Version, "type", art.Metadata.Artifact.Type, "scope", currentScope.Type)
-				break
+	// Report results - clean summary
+	if len(installResult.Installed) > 0 {
+		styledOut.Success(fmt.Sprintf("Installed %d skills", len(installResult.Installed)))
+		for _, name := range installResult.Installed {
+			styledOut.SuccessItem(name)
+			// Log version for this artifact
+			for _, art := range successfulDownloads {
+				if art.Artifact.Name == name {
+					log.Info("artifact installed", "name", name, "version", art.Artifact.Version, "type", art.Metadata.Artifact.Type, "scope", currentScope.Type)
+					break
+				}
 			}
 		}
 	}
 
 	if len(installResult.Failed) > 0 {
-		out.println()
-		out.printfErr("✗ Failed to install %d artifacts:\n", len(installResult.Failed))
+		styledOut.Error(fmt.Sprintf("Failed to install %d skills", len(installResult.Failed)))
 		for i, name := range installResult.Failed {
-			out.printfErr("  - %s: %v\n", name, installResult.Errors[i])
+			styledOut.ErrorItem(fmt.Sprintf("%s: %v", name, installResult.Errors[i]))
 			log.Error("artifact installation failed", "name", name, "error", installResult.Errors[i])
 		}
 		return fmt.Errorf("some artifacts failed to install")
@@ -478,16 +471,6 @@ func determineArtifactsToInstall(tracker *artifacts.Tracker, sortedArtifacts []*
 			}
 			artifactsToInstall = append(artifactsToInstall, art)
 		}
-	}
-
-	if len(artifactsToInstall) == 0 {
-		out.println("✓ All artifacts are up to date")
-		return artifactsToInstall
-	}
-
-	if len(artifactsToInstall) < len(sortedArtifacts) {
-		skipped := len(sortedArtifacts) - len(artifactsToInstall)
-		out.printf("Found %d new/changed artifact(s), %d unchanged\n", len(artifactsToInstall), skipped)
 	}
 
 	return artifactsToInstall
