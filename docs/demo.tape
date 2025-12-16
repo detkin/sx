@@ -26,7 +26,15 @@ Sleep 500ms
 Enter
 Sleep 2s
 Down
-Sleep 500ms
+Sleep 1s
+Down
+Sleep 1s
+Down
+Sleep 1s
+Up
+Sleep 1s
+Up
+Sleep 3s
 Enter
 Sleep 3s
 Enter
