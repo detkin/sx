@@ -134,7 +134,11 @@ func inputSimple(prompt, defaultValue string, in io.Reader, out io.Writer) (stri
 		fmt.Fprintf(out, "%s: ", prompt)
 	}
 
-	reader := bufio.NewReader(in)
+	// Reuse existing bufio.Reader if provided, otherwise create new one
+	reader, ok := in.(*bufio.Reader)
+	if !ok {
+		reader = bufio.NewReader(in)
+	}
 	input, err := reader.ReadString('\n')
 	if err != nil {
 		return "", fmt.Errorf("failed to read input: %w", err)

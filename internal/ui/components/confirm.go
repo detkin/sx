@@ -153,7 +153,11 @@ func confirmSimple(message string, defaultYes bool, in io.Reader, out io.Writer)
 
 	fmt.Fprintf(out, "%s %s: ", message, hint)
 
-	reader := bufio.NewReader(in)
+	// Reuse existing bufio.Reader if provided, otherwise create new one
+	reader, ok := in.(*bufio.Reader)
+	if !ok {
+		reader = bufio.NewReader(in)
+	}
 	input, err := reader.ReadString('\n')
 	if err != nil {
 		return false, fmt.Errorf("failed to read input: %w", err)

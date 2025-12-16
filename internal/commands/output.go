@@ -79,9 +79,3 @@ func (o *outputHelper) printfErr(format string, args ...interface{}) {
 func (o *outputHelper) prompt(message string) (string, error) {
 	return o.prompter.Prompt(message)
 }
-
-// promptWithDefault prompts the user with a default value
-// Delegates to the prompter interface for flexibility and testability
-func (o *outputHelper) promptWithDefault(message, defaultValue string) (string, error) {
-	return o.prompter.PromptWithDefault(message, defaultValue)
-}

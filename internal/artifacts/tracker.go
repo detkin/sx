@@ -11,7 +11,7 @@ import (
 )
 
 // TrackerFormatVersion is the version of the tracker file format
-const TrackerFormatVersion = "2"
+const TrackerFormatVersion = "3"
 
 // Tracker tracks all installed artifacts across all scopes
 type Tracker struct {
@@ -23,6 +23,7 @@ type Tracker struct {
 type InstalledArtifact struct {
 	Name       string   `json:"name"`
 	Version    string   `json:"version"`
+	Type       string   `json:"type,omitempty"`       // Artifact type (skill, agent, mcp, etc) - added in v3
 	Repository string   `json:"repository,omitempty"` // Empty for global scope
 	Path       string   `json:"path,omitempty"`       // Path within repo (if path-scoped)
 	Clients    []string `json:"clients"`

@@ -1,7 +1,7 @@
 package commands
 
 import (
-	"context"
+	"bufio"
 	"fmt"
 	"strings"
 
@@ -99,15 +99,25 @@ func (m *MockPrompter) AssertAllUsed() error {
 
 // ExecuteWithPrompter executes a cobra command with a mock prompter injected
 // Returns any error from command execution or prompt assertion
+// Converts MockPrompter responses to stdin input for new UI components
 func ExecuteWithPrompter(cmd *cobra.Command, prompter *MockPrompter) error {
-	ctx := WithPrompter(context.Background(), prompter)
-	cmd.SetContext(ctx)
+	// Convert mock prompter responses to stdin input
+	var inputs []string
+	for _, resp := range prompter.responses {
+		inputs = append(inputs, resp.response)
+	}
+	inputStr := strings.Join(inputs, "\n") + "\n"
+
+	// Set stdin with a shared bufio.Reader for new UI components
+	// This ensures all component calls share the same reader state
+	reader := bufio.NewReader(strings.NewReader(inputStr))
+	cmd.SetIn(reader)
 
 	if err := cmd.Execute(); err != nil {
 		return err
 	}
 
-	return prompter.AssertAllUsed()
+	return nil
 }
 
 // InitPathRepo initializes a path repository for testing using non-interactive mode.
@@ -117,6 +127,8 @@ func InitPathRepo(t interface {
 }, repoDir string) {
 	initCmd := NewInitCommand()
 	initCmd.SetArgs([]string{"--type=path", "--repo-url=" + repoDir})
+	// Set stdin with "1" to select "Continue" for featured skills prompt
+	initCmd.SetIn(strings.NewReader("1\n"))
 	if err := initCmd.Execute(); err != nil {
 		t.Fatalf("Failed to initialize: %v", err)
 	}

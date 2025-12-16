@@ -22,6 +22,8 @@ import (
 	"github.com/sleuth-io/skills/internal/lockfile"
 	"github.com/sleuth-io/skills/internal/metadata"
 	"github.com/sleuth-io/skills/internal/repository"
+	"github.com/sleuth-io/skills/internal/ui"
+	"github.com/sleuth-io/skills/internal/ui/components"
 	"github.com/sleuth-io/skills/internal/utils"
 )
 
@@ -67,12 +69,13 @@ func runAddWithOptions(cmd *cobra.Command, input string, promptInstall bool) err
 	defer cancel()
 
 	out := newOutputHelper(cmd)
+	status := components.NewStatus(cmd.OutOrStdout())
 
 	// Check if input is an existing artifact name (not a file, directory, or URL)
 	if input != "" && !isURL(input) && !github.IsTreeURL(input) {
 		if _, err := os.Stat(input); os.IsNotExist(err) {
 			// Not a file/directory - check if it's an existing artifact
-			return configureExistingArtifact(ctx, cmd, out, input, promptInstall)
+			return configureExistingArtifact(ctx, cmd, out, status, input, promptInstall)
 		}
 	}
 
@@ -95,7 +98,7 @@ func runAddWithOptions(cmd *cobra.Command, input string, promptInstall bool) err
 	}
 
 	// Check versions and content
-	version, contentsIdentical, err := checkVersionAndContents(ctx, out, repo, name, zipData)
+	version, contentsIdentical, err := checkVersionAndContents(ctx, out, status, repo, name, zipData)
 	if err != nil {
 		return err
 	}
@@ -103,10 +106,10 @@ func runAddWithOptions(cmd *cobra.Command, input string, promptInstall bool) err
 	// Handle identical content case
 	var addErr error
 	if contentsIdentical {
-		addErr = handleIdenticalArtifact(ctx, out, repo, name, version, artifactType)
+		addErr = handleIdenticalArtifact(ctx, out, status, repo, name, version, artifactType)
 	} else {
 		// Add new or updated artifact
-		addErr = addNewArtifact(ctx, out, repo, name, artifactType, version, zipFile, zipData, metadataExists)
+		addErr = addNewArtifact(ctx, out, status, repo, name, artifactType, version, zipFile, zipData, metadataExists)
 	}
 
 	if addErr != nil {
@@ -122,7 +125,7 @@ func runAddWithOptions(cmd *cobra.Command, input string, promptInstall bool) err
 }
 
 // configureExistingArtifact handles configuring scope for an artifact that already exists in the repository
-func configureExistingArtifact(ctx context.Context, cmd *cobra.Command, out *outputHelper, artifactName string, promptInstall bool) error {
+func configureExistingArtifact(ctx context.Context, cmd *cobra.Command, out *outputHelper, status *components.Status, artifactName string, promptInstall bool) error {
 	// Create repository instance
 	repo, err := createRepository()
 	if err != nil {
@@ -130,39 +133,169 @@ func configureExistingArtifact(ctx context.Context, cmd *cobra.Command, out *out
 	}
 
 	// Load lock file to find the artifact
+	status.Start("Syncing repository")
 	lockFileContent, _, _, err := repo.GetLockFile(ctx, "")
+	status.Clear()
+	var lockFile *lockfile.LockFile
 	if err != nil {
-		return fmt.Errorf("failed to fetch lock file: %w", err)
-	}
-
-	lockFile, err := lockfile.Parse(lockFileContent)
-	if err != nil {
-		return fmt.Errorf("failed to parse lock file: %w", err)
-	}
-
-	// Find the artifact
-	var foundArtifact *lockfile.Artifact
-	for i := range lockFile.Artifacts {
-		if lockFile.Artifacts[i].Name == artifactName {
-			foundArtifact = &lockFile.Artifacts[i]
-			break
+		// Lock file doesn't exist yet - create empty one
+		lockFile = &lockfile.LockFile{
+			Artifacts: []lockfile.Artifact{},
+		}
+	} else {
+		lockFile, err = lockfile.Parse(lockFileContent)
+		if err != nil {
+			return fmt.Errorf("failed to parse lock file: %w", err)
 		}
 	}
 
+	// Find all artifacts with this name in lock file
+	var foundArtifacts []*lockfile.Artifact
+	for i := range lockFile.Artifacts {
+		if lockFile.Artifacts[i].Name == artifactName {
+			foundArtifacts = append(foundArtifacts, &lockFile.Artifacts[i])
+		}
+	}
+
+	// Handle multiple versions - ask user which to configure
+	var foundArtifact *lockfile.Artifact
+	if len(foundArtifacts) > 1 {
+		// Build options for version selection
+		options := make([]components.Option, len(foundArtifacts))
+		for i, art := range foundArtifacts {
+			scopeDesc := "global"
+			if len(art.Repositories) > 0 {
+				scopeDesc = fmt.Sprintf("%d repositories", len(art.Repositories))
+			}
+			options[i] = components.Option{
+				Label:       fmt.Sprintf("v%s", art.Version),
+				Value:       art.Version,
+				Description: fmt.Sprintf("Currently installed: %s", scopeDesc),
+			}
+		}
+
+		out.println()
+		out.printf("Multiple versions of %s found in lock file\n", artifactName)
+		selected, err := components.SelectWithIO("Which version would you like to configure?", options, out.cmd.InOrStdin(), out.cmd.OutOrStdout())
+		if err != nil {
+			return fmt.Errorf("failed to select version: %w", err)
+		}
+
+		// Find the selected artifact
+		for _, art := range foundArtifacts {
+			if art.Version == selected.Value {
+				foundArtifact = art
+				break
+			}
+		}
+	} else if len(foundArtifacts) == 1 {
+		foundArtifact = foundArtifacts[0]
+	}
+
+	// If not in lock file, check if it exists in artifacts directory
 	if foundArtifact == nil {
-		return fmt.Errorf("artifact '%s' not found in repository", artifactName)
+		// Try to find versions in artifacts directory
+		status.Start("Checking for artifact versions")
+		versions, err := repo.GetVersionList(ctx, artifactName)
+		status.Clear()
+		if err != nil || len(versions) == 0 {
+			return fmt.Errorf("artifact '%s' not found in repository", artifactName)
+		}
+
+		// Use the latest version (last in list)
+		latestVersion := versions[len(versions)-1]
+
+		// Artifact exists in repository but not installed - treat as first-time install
+		out.printf("Found artifact: %s v%s in repository (not yet installed)\n", artifactName, latestVersion)
+
+		// Prompt for repositories with nil current state (new install)
+		repositories, err := promptForRepositories(out, artifactName, latestVersion, nil)
+		if err != nil {
+			return fmt.Errorf("failed to configure repositories: %w", err)
+		}
+
+		// If nil, user chose not to install
+		if repositories == nil {
+			out.println()
+			out.println("Artifact available in repository only")
+			return nil
+		}
+
+		// Create new artifact entry for lock file
+		newArtifact := &lockfile.Artifact{
+			Name:    artifactName,
+			Type:    artifact.TypeSkill, // Default to skill, could enhance later
+			Version: latestVersion,
+			SourcePath: &lockfile.SourcePath{
+				Path: fmt.Sprintf("./artifacts/%s/%s", artifactName, latestVersion),
+			},
+			Repositories: repositories,
+		}
+
+		// Add to lock file
+		if err := updateLockFile(ctx, out, repo, newArtifact); err != nil {
+			return fmt.Errorf("failed to update lock file: %w", err)
+		}
+
+		// Prompt to run install (if enabled)
+		if promptInstall {
+			promptRunInstall(cmd, ctx, out)
+		}
+
+		return nil
 	}
 
 	out.printf("Configuring scope for %s@%s\n", foundArtifact.Name, foundArtifact.Version)
 
-	// Prompt for repository configurations
-	repositories, err := promptForRepositories(out, foundArtifact.Name, foundArtifact.Version)
+	// Normalize nil to empty slice for global installations
+	// When artifact is in lock file with nil Repositories, it means global (TOML parses empty array as nil)
+	currentRepos := foundArtifact.Repositories
+	if currentRepos == nil {
+		currentRepos = []lockfile.Repository{}
+	}
+
+	// Prompt for repository configurations (pass current repositories for modification)
+	repositories, err := promptForRepositories(out, foundArtifact.Name, foundArtifact.Version, currentRepos)
 	if err != nil {
 		return fmt.Errorf("failed to configure repositories: %w", err)
 	}
 
-	// If nil, user chose not to install
+	// If nil, user chose to remove from installation
 	if repositories == nil {
+		// Remove artifact from lock file
+		if pathRepo, ok := repo.(*repository.PathRepository); ok {
+			lockFilePath := pathRepo.GetLockFilePath()
+			if err := lockfile.RemoveArtifact(lockFilePath, foundArtifact.Name, foundArtifact.Version); err != nil {
+				return fmt.Errorf("failed to remove artifact from lock file: %w", err)
+			}
+		} else if gitRepo, ok := repo.(*repository.GitRepository); ok {
+			lockFilePath := gitRepo.GetLockFilePath()
+			if err := lockfile.RemoveArtifact(lockFilePath, foundArtifact.Name, foundArtifact.Version); err != nil {
+				return fmt.Errorf("failed to remove artifact from lock file: %w", err)
+			}
+			// Commit and push the removal
+			if err := gitRepo.CommitAndPush(ctx, foundArtifact); err != nil {
+				return fmt.Errorf("failed to push removal: %w", err)
+			}
+		}
+
+		// Prompt to run install to clean up the removed artifact (if enabled)
+		if promptInstall {
+			out.println()
+			confirmed, err := components.ConfirmWithIO("Run install now to remove the artifact from clients?", true, cmd.InOrStdin(), cmd.OutOrStdout())
+			if err != nil {
+				return nil
+			}
+
+			if confirmed {
+				out.println()
+				if err := runInstall(cmd, nil, false, "", false); err != nil {
+					out.printfErr("Install failed: %v\n", err)
+				}
+			} else {
+				out.println("Run 'skills install' when ready to clean up.")
+			}
+		}
 		return nil
 	}
 
@@ -185,13 +318,12 @@ func configureExistingArtifact(ctx context.Context, cmd *cobra.Command, out *out
 // promptRunInstall asks if the user wants to run install after adding an artifact
 func promptRunInstall(cmd *cobra.Command, ctx context.Context, out *outputHelper) {
 	out.println()
-	response, err := out.prompt("Run install now to activate the artifact? (Y/n): ")
+	confirmed, err := components.ConfirmWithIO("Run install now to activate the artifact?", true, cmd.InOrStdin(), cmd.OutOrStdout())
 	if err != nil {
 		return
 	}
 
-	response = strings.ToLower(strings.TrimSpace(response))
-	if response == "n" || response == "no" {
+	if !confirmed {
 		out.println("Run 'skills install' when ready to activate.")
 		return
 	}
@@ -381,15 +513,15 @@ func createRepository() (repository.Repository, error) {
 }
 
 // checkVersionAndContents queries repository for versions and checks if content is identical
-func checkVersionAndContents(ctx context.Context, out *outputHelper, repo repository.Repository, name string, zipData []byte) (version string, identical bool, err error) {
-	out.println()
-	out.println("Checking for existing versions...")
+func checkVersionAndContents(ctx context.Context, out *outputHelper, status *components.Status, repo repository.Repository, name string, zipData []byte) (version string, identical bool, err error) {
+	status.Start("Checking for existing versions")
 	versions, err := repo.GetVersionList(ctx, name)
+	status.Clear()
 	if err != nil {
 		return "", false, fmt.Errorf("failed to get version list: %w", err)
 	}
 
-	version, identical, err = determineSuggestedVersionAndCheckIdentical(ctx, out, repo, name, versions, zipData)
+	version, identical, err = determineSuggestedVersionAndCheckIdentical(ctx, out, status, repo, name, versions, zipData)
 	if err != nil {
 		return "", false, err
 	}
@@ -398,12 +530,20 @@ func checkVersionAndContents(ctx context.Context, out *outputHelper, repo reposi
 }
 
 // handleIdenticalArtifact handles the case when content is identical to existing version
-func handleIdenticalArtifact(ctx context.Context, out *outputHelper, repo repository.Repository, name, version string, artifactType artifact.Type) error {
+func handleIdenticalArtifact(ctx context.Context, out *outputHelper, status *components.Status, repo repository.Repository, name, version string, artifactType artifact.Type) error {
+	_ = status // status not needed for identical artifacts (no git operations)
 	out.println()
 	out.printf("✓ Artifact %s@%s already exists in repository with identical contents\n", name, version)
 
-	// Prompt for repository configurations
-	repositories, err := promptForRepositories(out, name, version)
+	// Check if already in lock file to get current repositories
+	var currentRepos []lockfile.Repository
+	lockFilePath := constants.SkillLockFile
+	if existingArt, exists := lockfile.FindArtifact(lockFilePath, name); exists {
+		currentRepos = existingArt.Repositories
+	}
+
+	// Prompt for repository configurations (pass current if exists)
+	repositories, err := promptForRepositories(out, name, version, currentRepos)
 	if err != nil {
 		return fmt.Errorf("failed to configure repositories: %w", err)
 	}
@@ -432,7 +572,7 @@ func handleIdenticalArtifact(ctx context.Context, out *outputHelper, repo reposi
 }
 
 // addNewArtifact adds a new or updated artifact to the repository
-func addNewArtifact(ctx context.Context, out *outputHelper, repo repository.Repository, name string, artifactType artifact.Type, version, zipFile string, zipData []byte, metadataExists bool) error {
+func addNewArtifact(ctx context.Context, out *outputHelper, status *components.Status, repo repository.Repository, name string, artifactType artifact.Type, version, zipFile string, zipData []byte, metadataExists bool) error {
 	// Prompt user for version
 	version, err := promptForVersion(out, version)
 	if err != nil {
@@ -460,16 +600,24 @@ func addNewArtifact(ctx context.Context, out *outputHelper, repo repository.Repo
 
 	// Upload artifact files to repository
 	out.println()
-	out.println("Adding artifact to repository...")
+	status.Start("Adding artifact to repository")
 	if err := repo.AddArtifact(ctx, lockArtifact, zipData); err != nil {
+		status.Fail("Failed to add artifact")
 		return fmt.Errorf("failed to add artifact: %w", err)
 	}
+	status.Done("")
 
-	out.println()
 	out.printf("✓ Successfully added %s@%s\n", meta.Artifact.Name, meta.Artifact.Version)
 
+	// Check if already in lock file to get current repositories
+	var currentRepos []lockfile.Repository
+	lockFilePath := constants.SkillLockFile
+	if existingArt, exists := lockfile.FindArtifact(lockFilePath, lockArtifact.Name); exists {
+		currentRepos = existingArt.Repositories
+	}
+
 	// Prompt for repository configurations (how/where it's used)
-	repositories, err := promptForRepositories(out, lockArtifact.Name, lockArtifact.Version)
+	repositories, err := promptForRepositories(out, lockArtifact.Name, lockArtifact.Version, currentRepos)
 	if err != nil {
 		return fmt.Errorf("failed to configure repositories: %w", err)
 	}
@@ -534,16 +682,15 @@ func confirmNameAndType(out *outputHelper, name string, inType artifact.Type) (o
 	out.printf("  Type: %s\n", outType)
 	out.println()
 
-	response, err := out.prompt("Is this correct? (Y/n): ")
+	confirmed, err := components.ConfirmWithIO("Is this correct?", true, out.cmd.InOrStdin(), out.cmd.OutOrStdout())
 	if err != nil {
 		err = fmt.Errorf("failed to read confirmation: %w", err)
 		return
 	}
-	response = strings.ToLower(response)
 
-	if response == "n" || response == "no" {
+	if !confirmed {
 		// Prompt for custom name and type
-		nameInput, err2 := out.promptWithDefault("Artifact name", outName)
+		nameInput, err2 := components.InputWithIO("Artifact name", "", outName, out.cmd.InOrStdin(), out.cmd.OutOrStdout())
 		if err2 != nil {
 			err = fmt.Errorf("failed to read name: %w", err2)
 			return
@@ -552,7 +699,7 @@ func confirmNameAndType(out *outputHelper, name string, inType artifact.Type) (o
 			outName = nameInput
 		}
 
-		typeInput, err2 := out.promptWithDefault("Artifact type", outType.Label)
+		typeInput, err2 := components.InputWithIO("Artifact type", "", outType.Label, out.cmd.InOrStdin(), out.cmd.OutOrStdout())
 		if err2 != nil {
 			err = fmt.Errorf("failed to read type: %w", err2)
 			return
@@ -560,16 +707,13 @@ func confirmNameAndType(out *outputHelper, name string, inType artifact.Type) (o
 		if typeInput != "" {
 			outType = artifact.FromString(typeInput)
 		}
-	} else if response != "" && response != "y" && response != "yes" {
-		err = fmt.Errorf("cancelled by user")
-		return
 	}
 
 	return
 }
 
 // determineSuggestedVersionAndCheckIdentical determines the version to suggest and whether contents are identical
-func determineSuggestedVersionAndCheckIdentical(ctx context.Context, out *outputHelper, repo repository.Repository, name string, versions []string, newZipData []byte) (version string, identical bool, err error) {
+func determineSuggestedVersionAndCheckIdentical(ctx context.Context, out *outputHelper, status *components.Status, repo repository.Repository, name string, versions []string, newZipData []byte) (version string, identical bool, err error) {
 	if len(versions) == 0 {
 		// No existing versions, suggest 1.0
 		return "1.0", false, nil
@@ -580,7 +724,7 @@ func determineSuggestedVersionAndCheckIdentical(ctx context.Context, out *output
 	out.printf("Found existing version: %s\n", latestVersion)
 
 	// Try to get the artifact for comparison
-	out.println("Comparing with existing version...")
+	status.Start("Comparing with existing version")
 
 	var existingZipData []byte
 
@@ -590,16 +734,19 @@ func determineSuggestedVersionAndCheckIdentical(ctx context.Context, out *output
 	} else {
 		// For other repos, we'd need to construct an artifact and use GetArtifact
 		// For now, just suggest incrementing the version
+		status.Clear()
 		return suggestNextVersion(latestVersion), false, nil
 	}
 
 	if err != nil {
 		// If we can't get the existing version, suggest incrementing
+		status.Clear()
 		return suggestNextVersion(latestVersion), false, nil
 	}
 
 	// Compare the contents
 	contentsIdentical, err := utils.CompareZipContents(newZipData, existingZipData)
+	status.Clear()
 	if err != nil {
 		return "", false, fmt.Errorf("failed to compare contents: %w", err)
 	}
@@ -633,7 +780,7 @@ func suggestNextVersion(currentVersion string) string {
 // promptForVersion prompts the user to confirm or edit the version
 func promptForVersion(out *outputHelper, suggestedVersion string) (string, error) {
 	out.println()
-	version, err := out.promptWithDefault("Version", suggestedVersion)
+	version, err := components.InputWithIO("Version", "", suggestedVersion, out.cmd.InOrStdin(), out.cmd.OutOrStdout())
 	if err != nil {
 		return "", fmt.Errorf("failed to read version: %w", err)
 	}
@@ -745,193 +892,11 @@ func guessArtifactName(zipPath string) string {
 }
 
 // promptForRepositories prompts user for repository configurations and returns them
+// Takes currentRepos (nil if not installed, empty slice if global, or list of repos)
 // Returns nil, nil if user chooses not to install (which removes it from lock file if present)
-func promptForRepositories(out *outputHelper, artifactName, version string) ([]lockfile.Repository, error) {
-	out.println()
-	out.println("How would you like to install this artifact?")
-	out.println("  1. Make it available globally (in all projects)")
-	out.println("  2. Make it available for specific code repositories")
-	out.println("  3. No, don't install it")
-	out.println()
-
-	choice, err := out.promptWithDefault("Choose an option", "1")
-	if err != nil {
-		return nil, fmt.Errorf("failed to read choice: %w", err)
-	}
-
-	switch choice {
-	case "1":
-		return []lockfile.Repository{}, nil // Empty array = global
-	case "2":
-		return collectRepositories(out)
-	case "3":
-		// Remove from lock file if present
-		lockFilePath := constants.SkillLockFile
-		if _, exists := lockfile.FindArtifact(lockFilePath, artifactName); exists {
-			if err := lockfile.RemoveArtifact(lockFilePath, artifactName, version); err != nil {
-				out.printfErr("Warning: failed to remove from lock file: %v\n", err)
-			} else {
-				out.println()
-				out.println("✓ Removed from lock file")
-			}
-		} else {
-			out.println()
-			out.println("Artifact available in repository only")
-		}
-		return nil, nil // nil means don't install
-	default:
-		return nil, fmt.Errorf("invalid choice: %s", choice)
-	}
-}
-
-// collectRepositories collects one or more repository configurations
-// For each repo, asks if they want specific paths or the entire repo
-// Requires at least one repository to be specified
-func collectRepositories(out *outputHelper) ([]lockfile.Repository, error) {
-	var repositories []lockfile.Repository
-
-	for {
-		repoURL, err := promptForRepo(out)
-		if err != nil {
-			return nil, err
-		}
-
-		// Ask if they want specific paths or entire repo
-		response, err := out.prompt("Do you want to install for the entire repository? (Y/n): ")
-		if err != nil {
-			return nil, fmt.Errorf("failed to read response: %w", err)
-		}
-		response = strings.ToLower(strings.TrimSpace(response))
-
-		var paths []string
-		if response == "n" || response == "no" {
-			// Collect paths
-			for {
-				pathStr, err := promptForPath(out)
-				if err != nil {
-					return nil, err
-				}
-				paths = append(paths, pathStr)
-
-				if !promptForAnother(out, "Add another path in this repository? (y/N): ") {
-					break
-				}
-			}
-			if len(paths) > 0 {
-				out.printf("✓ Will install for %s at paths: %v\n", repoURL, paths)
-			} else {
-				out.printf("✓ Will install for entire repository: %s\n", repoURL)
-			}
-		} else {
-			out.printf("✓ Will install for entire repository: %s\n", repoURL)
-		}
-
-		repositories = append(repositories, lockfile.Repository{
-			Repo:  repoURL,
-			Paths: paths, // Empty if entire repo
-		})
-
-		if !promptForAnother(out, "Add another repository? (y/N): ") {
-			break
-		}
-	}
-
-	out.println()
-
-	if len(repositories) == 0 {
-		return nil, fmt.Errorf("at least one repository is required")
-	}
-
-	return repositories, nil
-}
-
-// updateLockFile updates the repository's lock file with the artifact
-func updateLockFile(ctx context.Context, out *outputHelper, repo repository.Repository, artifact *lockfile.Artifact) error {
-	// For git repos, update the lock file and commit
-	if gitRepo, ok := repo.(*repository.GitRepository); ok {
-		out.println()
-		out.println("Updating repository lock file...")
-		lockFilePath := gitRepo.GetLockFilePath()
-		if err := lockfile.AddOrUpdateArtifact(lockFilePath, artifact); err != nil {
-			return err
-		}
-
-		if artifact.IsGlobal() {
-			out.println("✓ Updated lock file (global installation)")
-		} else {
-			out.printf("✓ Updated lock file with %d repository installation(s)\n", len(artifact.Repositories))
-		}
-
-		out.println("Committing and pushing to repository...")
-		if err := gitRepo.CommitAndPush(ctx, artifact); err != nil {
-			return err
-		}
-		out.println("✓ Changes pushed to repository")
-		return nil
-	}
-
-	// For path repos, update the lock file directly
-	if pathRepo, ok := repo.(*repository.PathRepository); ok {
-		out.println()
-		out.println("Updating repository lock file...")
-		lockFilePath := pathRepo.GetLockFilePath()
-		if err := lockfile.AddOrUpdateArtifact(lockFilePath, artifact); err != nil {
-			return err
-		}
-
-		if artifact.IsGlobal() {
-			out.println("✓ Updated lock file (global installation)")
-		} else {
-			out.printf("✓ Updated lock file with %d repository installation(s)\n", len(artifact.Repositories))
-		}
-		return nil
-	}
-
-	return nil
-}
-
-// promptForRepo prompts for and validates a repository URL
-// Accepts full URLs or GitHub slugs (e.g., "user/repo")
-func promptForRepo(out *outputHelper) (string, error) {
-	repoInput, err := out.prompt("Code repository URL or GitHub slug (e.g., user/repo): ")
-	if err != nil {
-		return "", fmt.Errorf("failed to read repository: %w", err)
-	}
-	repo := strings.TrimSpace(repoInput)
-	if repo == "" {
-		return "", fmt.Errorf("repository is required")
-	}
-
-	// If it's just a slug (e.g., "user/repo"), convert to full GitHub URL
-	if !strings.Contains(repo, "://") && !strings.HasPrefix(repo, "git@") {
-		// Check if it looks like a GitHub slug (contains exactly one slash)
-		parts := strings.Split(repo, "/")
-		if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
-			repo = "https://github.com/" + repo
-		}
-	}
-
-	return repo, nil
-}
-
-// promptForPath prompts for and validates a path within a repository
-func promptForPath(out *outputHelper) (string, error) {
-	pathInput, err := out.prompt("Path within repository (e.g., backend/services): ")
-	if err != nil {
-		return "", fmt.Errorf("failed to read path: %w", err)
-	}
-	path := strings.TrimSpace(pathInput)
-	if path == "" {
-		return "", fmt.Errorf("path is required")
-	}
-	return path, nil
-}
-
-// promptForAnother asks if the user wants to add another entry
-func promptForAnother(out *outputHelper, prompt string) bool {
-	another, err := out.prompt(prompt)
-	if err != nil {
-		return false
-	}
-	return strings.ToLower(strings.TrimSpace(another)) == "y"
+func promptForRepositories(out *outputHelper, artifactName, version string, currentRepos []lockfile.Repository) ([]lockfile.Repository, error) {
+	// Use the new UI components (they automatically fall back to simple text in non-TTY)
+	styledOut := ui.NewOutput(out.cmd.OutOrStdout(), out.cmd.ErrOrStderr())
+	ioc := components.NewIOContext(out.cmd.InOrStdin(), out.cmd.OutOrStdout())
+	return promptForRepositoriesWithUI(artifactName, version, currentRepos, styledOut, ioc)
 }

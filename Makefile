@@ -34,7 +34,14 @@ install: build ## Install binary to ~/.local/bin
 
 test: ## Run tests
 	@echo "Running tests..."
-	@go test -v -race -cover ./...
+	@OUTPUT=$$(go test -race -cover ./... 2>&1); \
+	if [ $$? -eq 0 ]; then \
+		PASSED=$$(echo "$$OUTPUT" | grep -c "^ok"); \
+		echo "✓ All $$PASSED packages passed"; \
+	else \
+		echo "$$OUTPUT"; \
+		exit 1; \
+	fi
 
 lint: ## Run linters (requires golangci-lint)
 	@echo "Running linters..."

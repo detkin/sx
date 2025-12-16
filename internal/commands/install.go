@@ -509,6 +509,7 @@ func cleanupRemovedArtifacts(ctx context.Context, tracker *artifacts.Tracker, so
 		artifactsToRemove[i] = artifact.Artifact{
 			Name:    installed.Name,
 			Version: installed.Version,
+			Type:    artifact.FromString(installed.Type),
 		}
 	}
 
@@ -722,6 +723,7 @@ func saveInstallationState(tracker *artifacts.Tracker, sortedArtifacts []*lockfi
 		tracker.UpsertArtifact(artifacts.InstalledArtifact{
 			Name:       art.Name,
 			Version:    art.Version,
+			Type:       art.Type.Key,
 			Repository: key.Repository,
 			Path:       key.Path,
 			Clients:    targetClientIDs,

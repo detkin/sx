@@ -223,7 +223,11 @@ func selectNumbered(title string, options []Option, in io.Reader, out io.Writer)
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "Enter choice [1-%d]: ", len(options))
 
-	reader := bufio.NewReader(in)
+	// Reuse existing bufio.Reader if provided, otherwise create new one
+	reader, ok := in.(*bufio.Reader)
+	if !ok {
+		reader = bufio.NewReader(in)
+	}
 	input, err := reader.ReadString('\n')
 	if err != nil {
 		return nil, fmt.Errorf("failed to read input: %w", err)
@@ -245,6 +249,11 @@ func selectNumbered(title string, options []Option, in io.Reader, out io.Writer)
 
 // SelectWithDefault selects with a default option highlighted.
 func SelectWithDefault(title string, options []Option, defaultIndex int) (*Option, error) {
+	return SelectWithDefaultAndIO(title, options, defaultIndex, os.Stdin, os.Stdout)
+}
+
+// SelectWithDefaultAndIO selects with a default option highlighted using custom IO.
+func SelectWithDefaultAndIO(title string, options []Option, defaultIndex int, in io.Reader, out io.Writer) (*Option, error) {
 	if len(options) == 0 {
 		return nil, fmt.Errorf("no options provided")
 	}
@@ -255,13 +264,13 @@ func SelectWithDefault(title string, options []Option, defaultIndex int) (*Optio
 
 	// Fall back to numbered menu for non-TTY
 	if !ui.IsStdoutTTY() || !ui.IsStdinTTY() {
-		return selectNumberedWithDefault(title, options, defaultIndex, os.Stdin, os.Stdout)
+		return selectNumberedWithDefault(title, options, defaultIndex, in, out)
 	}
 
 	m := newSelectModel(title, options)
 	m.cursor = defaultIndex
 
-	p := tea.NewProgram(m)
+	p := tea.NewProgram(m, tea.WithOutput(out))
 
 	result, err := p.Run()
 	if err != nil {
@@ -296,7 +305,11 @@ func selectNumberedWithDefault(title string, options []Option, defaultIndex int,
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "Enter choice [1-%d, default=%d]: ", len(options), defaultIndex+1)
 
-	reader := bufio.NewReader(in)
+	// Reuse existing bufio.Reader if provided, otherwise create new one
+	reader, ok := in.(*bufio.Reader)
+	if !ok {
+		reader = bufio.NewReader(in)
+	}
 	input, err := reader.ReadString('\n')
 	if err != nil {
 		return nil, fmt.Errorf("failed to read input: %w", err)
