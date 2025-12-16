@@ -1,20 +1,20 @@
 package detectors
 
 import (
-	"github.com/sleuth-io/skills/internal/asset"
-	"github.com/sleuth-io/skills/internal/metadata"
+	"github.com/sleuth-io/sx/internal/asset"
+	"github.com/sleuth-io/sx/internal/metadata"
 )
 
-// AgentHandler handles agent artifact installation
+// AgentDetector detects agent assets
 type AgentDetector struct{}
 
 // Compile-time interface checks
 var (
-	_ ArtifactTypeDetector = (*AgentDetector)(nil)
-	_ UsageDetector        = (*AgentDetector)(nil)
+	_ AssetTypeDetector = (*AgentDetector)(nil)
+	_ UsageDetector     = (*AgentDetector)(nil)
 )
 
-// DetectType returns true if files indicate this is an agent artifact
+// DetectType returns true if files indicate this is an agent asset
 func (h *AgentDetector) DetectType(files []string) bool {
 	for _, file := range files {
 		if file == "AGENT.md" || file == "agent.md" {
@@ -24,7 +24,7 @@ func (h *AgentDetector) DetectType(files []string) bool {
 	return false
 }
 
-// GetType returns the artifact type string
+// GetType returns the asset type string
 func (h *AgentDetector) GetType() string {
 	return "agent"
 }
@@ -33,7 +33,7 @@ func (h *AgentDetector) GetType() string {
 func (h *AgentDetector) CreateDefaultMetadata(name, version string) *metadata.Metadata {
 	return &metadata.Metadata{
 		MetadataVersion: "1.0",
-		Artifact: metadata.Artifact{
+		Asset: metadata.Asset{
 			Name:    name,
 			Version: version,
 			Type:    asset.TypeAgent,

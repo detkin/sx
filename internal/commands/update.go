@@ -8,7 +8,7 @@ import (
 	"github.com/creativeprojects/go-selfupdate"
 	"github.com/spf13/cobra"
 
-	"github.com/sleuth-io/skills/internal/buildinfo"
+	"github.com/sleuth-io/sx/internal/buildinfo"
 )
 
 const (

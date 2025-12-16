@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sleuth-io/skills/internal/logger"
+	"github.com/sleuth-io/sx/internal/logger"
 )
 
 // Output is an interface for printing messages during hook installation
@@ -44,7 +44,7 @@ func InstallHooks(out Output) error {
 	return nil
 }
 
-// installSessionStartHook installs the SessionStart hook for auto-updating artifacts
+// installSessionStartHook installs the SessionStart hook for auto-updating assets
 func installSessionStartHook(claudeDir string, out Output) error {
 	settingsPath := filepath.Join(claudeDir, "settings.json")
 

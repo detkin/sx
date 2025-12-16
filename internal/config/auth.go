@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/pkg/browser"
-	"github.com/sleuth-io/skills/internal/buildinfo"
+	"github.com/sleuth-io/sx/internal/buildinfo"
 )
 
 const (

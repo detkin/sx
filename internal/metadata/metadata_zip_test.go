@@ -6,13 +6,13 @@ import (
 	"io"
 	"testing"
 
-	"github.com/sleuth-io/skills/internal/asset"
-	"github.com/sleuth-io/skills/internal/utils"
+	"github.com/sleuth-io/sx/internal/asset"
+	"github.com/sleuth-io/sx/internal/utils"
 )
 
 // TestMCPMetadataInZip tests that MCP metadata survives being zipped and extracted
 func TestMCPMetadataInZip(t *testing.T) {
-	originalTOML := `[artifact]
+	originalTOML := `[asset]
 name = "test-mcp"
 version = "1.0.0"
 type = "mcp"
@@ -149,7 +149,7 @@ args = [
 		t.Fatalf("Validation failed after re-zip: %v", err)
 	}
 
-	if meta2.Artifact.Type != asset.TypeMCP {
-		t.Errorf("Type changed after re-zip: got %q, want %q", meta2.Artifact.Type, asset.TypeMCP)
+	if meta2.Asset.Type != asset.TypeMCP {
+		t.Errorf("Type changed after re-zip: got %q, want %q", meta2.Asset.Type, asset.TypeMCP)
 	}
 }

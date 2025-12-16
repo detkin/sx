@@ -1,4 +1,4 @@
-module github.com/sleuth-io/skills
+module github.com/sleuth-io/sx
 
 go 1.25
 

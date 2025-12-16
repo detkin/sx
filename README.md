@@ -11,7 +11,7 @@ tools across your entire team. Think NPM for AI agents -- install once, use ever
 ## Quickstart
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sleuth-io/skills/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sleuth-io/sx/main/install.sh | bash
 ```
 
 then

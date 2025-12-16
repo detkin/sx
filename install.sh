@@ -44,7 +44,7 @@ esac
 
 # Get latest release version
 echo "Fetching latest release..."
-VERSION=$(curl -s https://api.github.com/repos/sleuth-io/skills/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+VERSION=$(curl -s https://api.github.com/repos/sleuth-io/sx/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
 
 if [ -z "$VERSION" ]; then
     echo "Error: Could not fetch latest version"
@@ -55,7 +55,7 @@ echo "Installing sx ${VERSION} for ${OS}_${ARCH}..."
 
 # Build download URL
 BINARY_NAME="sx_${OS}_${ARCH}.${EXT}"
-URL="https://github.com/sleuth-io/skills/releases/download/${VERSION}/${BINARY_NAME}"
+URL="https://github.com/sleuth-io/sx/releases/download/${VERSION}/${BINARY_NAME}"
 
 # Determine install location
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"

@@ -8,12 +8,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/sleuth-io/skills/internal/config"
-	"github.com/sleuth-io/skills/internal/constants"
-	"github.com/sleuth-io/skills/internal/lockfile"
-	"github.com/sleuth-io/skills/internal/requirements"
-	"github.com/sleuth-io/skills/internal/resolver"
-	vaultpkg "github.com/sleuth-io/skills/internal/vault"
+	"github.com/sleuth-io/sx/internal/config"
+	"github.com/sleuth-io/sx/internal/constants"
+	"github.com/sleuth-io/sx/internal/lockfile"
+	"github.com/sleuth-io/sx/internal/requirements"
+	"github.com/sleuth-io/sx/internal/resolver"
+	vaultpkg "github.com/sleuth-io/sx/internal/vault"
 )
 
 // NewLockCommand creates the lock command
@@ -92,13 +92,13 @@ func runLock(cmd *cobra.Command, args []string, requirementsFile, outputFile str
 		return fmt.Errorf("failed to resolve requirements: %w", err)
 	}
 
-	out.printf("Resolved %d assets (including dependencies)\n", len(lockFile.Artifacts))
+	out.printf("Resolved %d assets (including dependencies)\n", len(lockFile.Assets))
 	out.println()
 
-	// Display resolved artifacts
+	// Display resolved assets
 	out.println("Resolved assets:")
-	for _, artifact := range lockFile.Artifacts {
-		out.printf("  - %s@%s (%s) [%s]\n", artifact.Name, artifact.Version, artifact.Type, artifact.GetSourceType())
+	for _, asset := range lockFile.Assets {
+		out.printf("  - %s@%s (%s) [%s]\n", asset.Name, asset.Version, asset.Type, asset.GetSourceType())
 	}
 	out.println()
 

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sleuth-io/skills/internal/buildinfo"
-	"github.com/sleuth-io/skills/internal/cache"
+	"github.com/sleuth-io/sx/internal/buildinfo"
+	"github.com/sleuth-io/sx/internal/cache"
 )
 
 func TestShouldCheckDevBuild(t *testing.T) {

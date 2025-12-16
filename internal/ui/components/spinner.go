@@ -9,8 +9,8 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/sleuth-io/skills/internal/ui"
-	"github.com/sleuth-io/skills/internal/ui/theme"
+	"github.com/sleuth-io/sx/internal/ui"
+	"github.com/sleuth-io/sx/internal/ui/theme"
 )
 
 // spinnerDoneMsg signals that the spinner task is complete.

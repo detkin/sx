@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sleuth-io/skills/internal/utils"
+	"github.com/sleuth-io/sx/internal/utils"
 )
 
 func TestLoadFallbackToLegacy(t *testing.T) {

@@ -20,9 +20,9 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/sleuth-io/skills/internal/buildinfo.Version={{.Version}}
-      - -X github.com/sleuth-io/skills/internal/buildinfo.Commit={{.Commit}}
-      - -X github.com/sleuth-io/skills/internal/buildinfo.Date={{.Date}}
+      - -X github.com/sleuth-io/sx/internal/buildinfo.Version={{.Version}}
+      - -X github.com/sleuth-io/sx/internal/buildinfo.Commit={{.Commit}}
+      - -X github.com/sleuth-io/sx/internal/buildinfo.Date={{.Date}}
 
 archives:
   - id: sx
@@ -55,7 +55,7 @@ changelog:
 release:
   github:
     owner: sleuth-io
-    name: skills
+    name: sx
   draft: false
   prerelease: auto
   name_template: "{{.ProjectName}} v{{.Version}}"

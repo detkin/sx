@@ -1,11 +1,11 @@
 package dirasset
 
 import (
-	"github.com/sleuth-io/skills/internal/asset"
+	"github.com/sleuth-io/sx/internal/asset"
 )
 
-// InstalledArtifactInfo represents information about an installed artifact
-type InstalledArtifactInfo struct {
+// InstalledAssetInfo represents information about an installed asset
+type InstalledAssetInfo struct {
 	Name        string
 	Description string
 	Version     string

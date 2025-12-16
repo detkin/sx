@@ -9,12 +9,12 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sleuth-io/skills/internal/clients"
-	"github.com/sleuth-io/skills/internal/config"
-	"github.com/sleuth-io/skills/internal/gitutil"
-	"github.com/sleuth-io/skills/internal/logger"
-	"github.com/sleuth-io/skills/internal/stats"
-	vaultpkg "github.com/sleuth-io/skills/internal/vault"
+	"github.com/sleuth-io/sx/internal/clients"
+	"github.com/sleuth-io/sx/internal/config"
+	"github.com/sleuth-io/sx/internal/gitutil"
+	"github.com/sleuth-io/sx/internal/logger"
+	"github.com/sleuth-io/sx/internal/stats"
+	vaultpkg "github.com/sleuth-io/sx/internal/vault"
 )
 
 // UsageReporter handles reporting skill usage
@@ -159,10 +159,10 @@ func (s *Server) ReportSkillUsage(skillName, skillVersion string) {
 
 	// Create usage event
 	usageEvent := stats.UsageEvent{
-		ArtifactName:    skillName,
-		ArtifactVersion: skillVersion,
-		ArtifactType:    "skill",
-		Timestamp:       time.Now().UTC().Format(time.RFC3339),
+		AssetName:    skillName,
+		AssetVersion: skillVersion,
+		AssetType:    "skill",
+		Timestamp:    time.Now().UTC().Format(time.RFC3339),
 	}
 
 	// Enqueue event (fast, local file write)

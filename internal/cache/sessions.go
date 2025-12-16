@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sleuth-io/skills/internal/utils"
+	"github.com/sleuth-io/sx/internal/utils"
 )
 
 // SessionCache provides fast conversation/session ID tracking for clients

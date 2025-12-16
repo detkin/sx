@@ -10,12 +10,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/sleuth-io/skills/internal/assets"
-	"github.com/sleuth-io/skills/internal/assets/detectors"
-	"github.com/sleuth-io/skills/internal/config"
-	"github.com/sleuth-io/skills/internal/logger"
-	"github.com/sleuth-io/skills/internal/stats"
-	vaultpkg "github.com/sleuth-io/skills/internal/vault"
+	"github.com/sleuth-io/sx/internal/assets"
+	"github.com/sleuth-io/sx/internal/assets/detectors"
+	"github.com/sleuth-io/sx/internal/config"
+	"github.com/sleuth-io/sx/internal/logger"
+	"github.com/sleuth-io/sx/internal/stats"
+	vaultpkg "github.com/sleuth-io/sx/internal/vault"
 )
 
 // NewReportUsageCommand creates the report-usage command
@@ -65,56 +65,56 @@ func runReportUsage(cmd *cobra.Command, args []string) error {
 		&detectors.HookDetector{},
 	}
 
-	// Try to detect artifact usage from each handler
-	var artifactName string
-	var artifactType string
+	// Try to detect asset usage from each handler
+	var assetName string
+	var assetType string
 	var detected bool
 
 	for _, handler := range allHandlers {
-		artifactName, detected = handler.DetectUsageFromToolCall(event.ToolName, event.ToolInput)
+		assetName, detected = handler.DetectUsageFromToolCall(event.ToolName, event.ToolInput)
 		if detected {
-			// Get artifact type from handler
-			if typedHandler, ok := handler.(detectors.ArtifactTypeDetector); ok {
-				artifactType = typedHandler.GetType()
+			// Get asset type from handler
+			if typedHandler, ok := handler.(detectors.AssetTypeDetector); ok {
+				assetType = typedHandler.GetType()
 			}
 			break
 		}
 	}
 
 	// If no handler detected usage, exit silently
-	if !detected || artifactName == "" {
+	if !detected || assetName == "" {
 		return nil
 	}
 
-	// Load tracker to check if artifact is installed
+	// Load tracker to check if asset is installed
 	tracker, err := assets.LoadTracker()
 	if err != nil {
 		// Tracker doesn't exist, exit silently
 		return nil
 	}
 
-	// Check if artifact is in tracker
-	var artifactVersion string
+	// Check if asset is in tracker
+	var assetVersion string
 	found := false
-	for _, installed := range tracker.Artifacts {
-		if installed.Name == artifactName {
-			artifactVersion = installed.Version
+	for _, installed := range tracker.Assets {
+		if installed.Name == assetName {
+			assetVersion = installed.Version
 			found = true
 			break
 		}
 	}
 
 	if !found {
-		// Artifact not installed by us, exit silently
+		// Asset not installed by us, exit silently
 		return nil
 	}
 
 	// Create usage event
 	usageEvent := stats.UsageEvent{
-		ArtifactName:    artifactName,
-		ArtifactVersion: artifactVersion,
-		ArtifactType:    artifactType,
-		Timestamp:       time.Now().UTC().Format(time.RFC3339),
+		AssetName:    assetName,
+		AssetVersion: assetVersion,
+		AssetType:    assetType,
+		Timestamp:    time.Now().UTC().Format(time.RFC3339),
 	}
 
 	// Enqueue event
@@ -125,7 +125,7 @@ func runReportUsage(cmd *cobra.Command, args []string) error {
 
 	// Log successful usage tracking
 	log := logger.Get()
-	log.Info("artifact usage tracked", "name", artifactName, "version", artifactVersion, "type", artifactType)
+	log.Info("asset usage tracked", "name", assetName, "version", assetVersion, "type", assetType)
 
 	// Try to flush queue
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

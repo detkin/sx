@@ -5,14 +5,14 @@ import (
 	"os"
 	"strings"
 
-	"github.com/sleuth-io/skills/internal/autoupdate"
-	"github.com/sleuth-io/skills/internal/buildinfo"
-	"github.com/sleuth-io/skills/internal/clients"
-	"github.com/sleuth-io/skills/internal/clients/claude_code"
-	"github.com/sleuth-io/skills/internal/clients/cursor"
-	"github.com/sleuth-io/skills/internal/commands"
-	"github.com/sleuth-io/skills/internal/git"
-	"github.com/sleuth-io/skills/internal/logger"
+	"github.com/sleuth-io/sx/internal/autoupdate"
+	"github.com/sleuth-io/sx/internal/buildinfo"
+	"github.com/sleuth-io/sx/internal/clients"
+	"github.com/sleuth-io/sx/internal/clients/claude_code"
+	"github.com/sleuth-io/sx/internal/clients/cursor"
+	"github.com/sleuth-io/sx/internal/commands"
+	"github.com/sleuth-io/sx/internal/git"
+	"github.com/sleuth-io/sx/internal/logger"
 	"github.com/spf13/cobra"
 )
 

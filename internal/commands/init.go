@@ -10,10 +10,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/sleuth-io/skills/internal/config"
-	"github.com/sleuth-io/skills/internal/registry"
-	"github.com/sleuth-io/skills/internal/ui"
-	"github.com/sleuth-io/skills/internal/ui/components"
+	"github.com/sleuth-io/sx/internal/config"
+	"github.com/sleuth-io/sx/internal/registry"
+	"github.com/sleuth-io/sx/internal/ui"
+	"github.com/sleuth-io/sx/internal/ui/components"
 )
 
 const (

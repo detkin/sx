@@ -9,9 +9,9 @@ import (
 
 	"github.com/creativeprojects/go-selfupdate"
 
-	"github.com/sleuth-io/skills/internal/buildinfo"
-	"github.com/sleuth-io/skills/internal/cache"
-	"github.com/sleuth-io/skills/internal/logger"
+	"github.com/sleuth-io/sx/internal/buildinfo"
+	"github.com/sleuth-io/sx/internal/cache"
+	"github.com/sleuth-io/sx/internal/logger"
 )
 
 const (

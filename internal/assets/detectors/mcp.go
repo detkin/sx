@@ -3,20 +3,20 @@ package detectors
 import (
 	"strings"
 
-	"github.com/sleuth-io/skills/internal/asset"
-	"github.com/sleuth-io/skills/internal/metadata"
+	"github.com/sleuth-io/sx/internal/asset"
+	"github.com/sleuth-io/sx/internal/metadata"
 )
 
-// MCPHandler handles MCP server artifact installation
+// MCPDetector detects MCP server assets
 type MCPDetector struct{}
 
 // Compile-time interface checks
 var (
-	_ ArtifactTypeDetector = (*MCPDetector)(nil)
-	_ UsageDetector        = (*MCPDetector)(nil)
+	_ AssetTypeDetector = (*MCPDetector)(nil)
+	_ UsageDetector     = (*MCPDetector)(nil)
 )
 
-// DetectType returns true if files indicate this is an MCP artifact
+// DetectType returns true if files indicate this is an MCP asset
 func (h *MCPDetector) DetectType(files []string) bool {
 	for _, file := range files {
 		if file == "package.json" {
@@ -26,7 +26,7 @@ func (h *MCPDetector) DetectType(files []string) bool {
 	return false
 }
 
-// GetType returns the artifact type string
+// GetType returns the asset type string
 func (h *MCPDetector) GetType() string {
 	return "mcp"
 }
@@ -35,7 +35,7 @@ func (h *MCPDetector) GetType() string {
 func (h *MCPDetector) CreateDefaultMetadata(name, version string) *metadata.Metadata {
 	return &metadata.Metadata{
 		MetadataVersion: "1.0",
-		Artifact: metadata.Artifact{
+		Asset: metadata.Asset{
 			Name:    name,
 			Version: version,
 			Type:    asset.TypeMCP,

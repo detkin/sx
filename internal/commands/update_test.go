@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/sleuth-io/skills/internal/buildinfo"
+	"github.com/sleuth-io/sx/internal/buildinfo"
 )
 
 func TestUpdateCommandDevBuild(t *testing.T) {

@@ -10,8 +10,8 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/sleuth-io/skills/internal/ui"
-	"github.com/sleuth-io/skills/internal/ui/theme"
+	"github.com/sleuth-io/sx/internal/ui"
+	"github.com/sleuth-io/sx/internal/ui/theme"
 )
 
 // confirmModel is the bubbletea model for the confirm component.

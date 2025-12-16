@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/sleuth-io/skills/internal/logger"
+	"github.com/sleuth-io/sx/internal/logger"
 )
 
 // stdinCache stores stdin data so it can be read multiple times

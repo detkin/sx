@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/sleuth-io/skills/internal/cache"
+	"github.com/sleuth-io/sx/internal/cache"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 

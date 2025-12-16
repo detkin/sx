@@ -5,7 +5,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/sleuth-io/skills/internal/ui/theme"
+	"github.com/sleuth-io/sx/internal/ui/theme"
 )
 
 // Output provides styled terminal output.

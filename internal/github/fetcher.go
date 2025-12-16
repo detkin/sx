@@ -11,7 +11,7 @@ import (
 	"path"
 	"time"
 
-	"github.com/sleuth-io/skills/internal/buildinfo"
+	"github.com/sleuth-io/sx/internal/buildinfo"
 )
 
 // Fetcher handles downloading files and directories from GitHub.

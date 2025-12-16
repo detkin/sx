@@ -3,8 +3,8 @@ package commands
 import (
 	"context"
 
-	"github.com/sleuth-io/skills/internal/clients"
-	"github.com/sleuth-io/skills/internal/logger"
+	"github.com/sleuth-io/sx/internal/clients"
+	"github.com/sleuth-io/sx/internal/logger"
 )
 
 // installAllClientHooks detects installed clients and installs hooks for each.

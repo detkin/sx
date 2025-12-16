@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/sleuth-io/skills/internal/constants"
+	"github.com/sleuth-io/sx/internal/constants"
 )
 
 // RunDefaultCommand runs the default command (install if lock file exists)
