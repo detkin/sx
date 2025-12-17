@@ -47,7 +47,7 @@ Your prompt files stay exactly as they are - `sx` just wraps them with metadata 
 - **Agents** - Autonomous AI agents with specific goals
 - **Commands** - Slash commands for quick actions
 - **Hooks** - Automation triggers for lifecycle events
-- **MCP Servers** - Model Context Protocol (MCP) servers for external integrations
+- **MCP Servers** (experimental) - Model Context Protocol (MCP) servers for external integrations
 
 ## Distribution models
 
