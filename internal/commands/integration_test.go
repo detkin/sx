@@ -168,3 +168,92 @@ prompt-file = "SKILL.md"
 
 	t.Log("✓ Integration test passed!")
 }
+
+// TestRepoScopedAssetCleanup verifies that when a repo-scoped asset is removed
+// from the lock file, cleanup correctly removes it from {repoRoot}/.claude/
+// and not from ~/.claude/
+//
+// This tests the buggy code path in cleanupRemovedAssets which uses buildInstallScope.
+// If clients.ScopeRepository doesn't match lockfile.ScopeRepo, the scope type
+// won't match in determineTargetBase and cleanup will target the wrong directory.
+func TestRepoScopedAssetCleanup(t *testing.T) {
+	env := NewTestEnv(t)
+
+	vaultDir := env.SetupPathVault()
+	env.AddSkillToVault(vaultDir, "repo-skill", "1.0.0")
+	env.AddSkillToVault(vaultDir, "global-skill", "1.0.0")
+
+	// Lock file WITH both assets (one repo-scoped, one global)
+	lockFileWithBoth := `lock-version = "1"
+version = "1.0.0"
+created-by = "test"
+
+[[assets]]
+name = "repo-skill"
+version = "1.0.0"
+type = "skill"
+
+[assets.source-path]
+path = "assets/repo-skill/1.0.0"
+
+[[assets.scopes]]
+repo = "https://github.com/testorg/testrepo"
+
+[[assets]]
+name = "global-skill"
+version = "1.0.0"
+type = "skill"
+
+[assets.source-path]
+path = "assets/global-skill/1.0.0"
+`
+	env.WriteLockFile(vaultDir, lockFileWithBoth)
+
+	// Set up git repo matching the scope
+	projectDir := env.SetupGitRepo("project", "https://github.com/testorg/testrepo")
+	env.Chdir(projectDir)
+
+	// Step 1: Install both assets
+	installCmd := NewInstallCommand()
+	if err := installCmd.Execute(); err != nil {
+		t.Fatalf("Initial install failed: %v", err)
+	}
+
+	repoSkillDir := filepath.Join(projectDir, ".claude", "skills", "repo-skill")
+	globalSkillDir := filepath.Join(env.GlobalClaudeDir(), "skills", "global-skill")
+	env.AssertFileExists(repoSkillDir)
+	env.AssertFileExists(globalSkillDir)
+	t.Log("✓ Both assets installed")
+
+	// Step 2: Remove repo-scoped asset from lock file, keep global one
+	// This ensures cleanup runs (needs at least one applicable asset)
+	lockFileWithoutRepoSkill := `lock-version = "1"
+version = "1.0.0"
+created-by = "test"
+
+[[assets]]
+name = "global-skill"
+version = "1.0.0"
+type = "skill"
+
+[assets.source-path]
+path = "assets/global-skill/1.0.0"
+`
+	env.WriteLockFile(vaultDir, lockFileWithoutRepoSkill)
+
+	// Step 3: Run install again - this should trigger cleanup
+	installCmd2 := NewInstallCommand()
+	if err := installCmd2.Execute(); err != nil {
+		t.Fatalf("Second install failed: %v", err)
+	}
+
+	// Step 4: Verify asset was removed from repo's .claude (not from ~/.claude)
+	// If the bug is present, cleanup targets ~/.claude instead of {repo}/.claude,
+	// so the skill remains in the repo directory when it should be gone.
+	if _, err := os.Stat(repoSkillDir); err == nil {
+		t.Errorf("Asset should have been cleaned up from repo directory: %s", repoSkillDir)
+		t.Error("This indicates cleanup targeted the wrong directory (likely ~/.claude instead of repo/.claude)")
+	} else {
+		t.Log("✓ Asset correctly cleaned up from repo directory")
+	}
+}

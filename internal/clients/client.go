@@ -105,7 +105,7 @@ type ScopeType string
 
 const (
 	ScopeGlobal     ScopeType = "global"
-	ScopeRepository ScopeType = "repository"
+	ScopeRepository ScopeType = "repo" // Must match lockfile.ScopeRepo
 	ScopePath       ScopeType = "path"
 )
 

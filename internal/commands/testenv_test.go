@@ -1,0 +1,187 @@
+package commands
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+)
+
+// TestEnv provides an isolated test environment with common setup utilities.
+type TestEnv struct {
+	t       *testing.T
+	TempDir string // Root temp directory
+	HomeDir string // Simulated home directory
+	origDir string // Original working directory for cleanup
+}
+
+// NewTestEnv creates a new isolated test environment.
+// It sets HOME and XDG environment variables and creates ~/.claude/settings.json
+// so that the Claude Code client is detected.
+func NewTestEnv(t *testing.T) *TestEnv {
+	t.Helper()
+
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, "home")
+	claudeDir := filepath.Join(homeDir, ".claude")
+
+	// Set environment for sandboxing
+	t.Setenv("HOME", homeDir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(homeDir, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(homeDir, ".cache"))
+
+	// Create directories
+	for _, dir := range []string{homeDir, claudeDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("Failed to create directory %s: %v", dir, err)
+		}
+	}
+
+	// Create settings.json so Claude Code client is detected
+	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte("{}"), 0644); err != nil {
+		t.Fatalf("Failed to create settings.json: %v", err)
+	}
+
+	origDir, _ := os.Getwd()
+
+	return &TestEnv{
+		t:       t,
+		TempDir: tempDir,
+		HomeDir: homeDir,
+		origDir: origDir,
+	}
+}
+
+// GlobalClaudeDir returns the path to ~/.claude
+func (e *TestEnv) GlobalClaudeDir() string {
+	return filepath.Join(e.HomeDir, ".claude")
+}
+
+// Chdir changes to the specified directory and registers cleanup to restore.
+func (e *TestEnv) Chdir(dir string) {
+	e.t.Helper()
+	if err := os.Chdir(dir); err != nil {
+		e.t.Fatalf("Failed to chdir to %s: %v", dir, err)
+	}
+	e.t.Cleanup(func() {
+		_ = os.Chdir(e.origDir)
+	})
+}
+
+// MkdirAll creates a directory and all parents.
+func (e *TestEnv) MkdirAll(path string) string {
+	e.t.Helper()
+	if err := os.MkdirAll(path, 0755); err != nil {
+		e.t.Fatalf("Failed to create directory %s: %v", path, err)
+	}
+	return path
+}
+
+// WriteFile writes content to a file, creating parent directories as needed.
+func (e *TestEnv) WriteFile(path, content string) {
+	e.t.Helper()
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		e.t.Fatalf("Failed to create directory %s: %v", dir, err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		e.t.Fatalf("Failed to write file %s: %v", path, err)
+	}
+}
+
+// SetupPathVault creates a path-type vault with config pointing to it.
+// Returns the vault directory path.
+func (e *TestEnv) SetupPathVault() string {
+	e.t.Helper()
+
+	vaultDir := e.MkdirAll(filepath.Join(e.TempDir, "vault"))
+
+	// Create config
+	configDir := e.MkdirAll(filepath.Join(e.HomeDir, ".config", "sx"))
+	configContent := fmt.Sprintf(`{"type":"path","repositoryUrl":"file://%s"}`, vaultDir)
+	e.WriteFile(filepath.Join(configDir, "config.json"), configContent)
+
+	return vaultDir
+}
+
+// AddSkillToVault adds a skill to the vault directory.
+// Returns the skill source directory path.
+func (e *TestEnv) AddSkillToVault(vaultDir, name, version string) string {
+	e.t.Helper()
+
+	skillDir := e.MkdirAll(filepath.Join(vaultDir, "assets", name, version))
+
+	metadata := fmt.Sprintf(`[asset]
+name = "%s"
+type = "skill"
+version = "%s"
+description = "Test skill %s"
+
+[skill]
+readme = "README.md"
+prompt-file = "SKILL.md"
+`, name, version, name)
+
+	e.WriteFile(filepath.Join(skillDir, "metadata.toml"), metadata)
+	e.WriteFile(filepath.Join(skillDir, "README.md"), "# "+name)
+	e.WriteFile(filepath.Join(skillDir, "SKILL.md"), "You are "+name)
+
+	return skillDir
+}
+
+// WriteLockFile writes a lock file to the vault directory.
+func (e *TestEnv) WriteLockFile(vaultDir, content string) {
+	e.t.Helper()
+	e.WriteFile(filepath.Join(vaultDir, "sx.lock"), content)
+}
+
+// SetupGitRepo initializes a git repo with a remote URL.
+// Returns the repo directory path.
+func (e *TestEnv) SetupGitRepo(name, remoteURL string) string {
+	e.t.Helper()
+
+	repoDir := e.MkdirAll(filepath.Join(e.TempDir, name))
+
+	// git init
+	e.runGit(repoDir, "init")
+
+	// git config
+	e.runGit(repoDir, "config", "user.email", "test@test.com")
+	e.runGit(repoDir, "config", "user.name", "Test")
+
+	// Create initial commit (needed for some git operations)
+	e.WriteFile(filepath.Join(repoDir, ".gitkeep"), "")
+	e.runGit(repoDir, "add", ".")
+	e.runGit(repoDir, "commit", "-m", "init")
+
+	// Add remote
+	e.runGit(repoDir, "remote", "add", "origin", remoteURL)
+
+	return repoDir
+}
+
+func (e *TestEnv) runGit(dir string, args ...string) {
+	e.t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		e.t.Fatalf("git %v failed: %v\n%s", args, err, output)
+	}
+}
+
+// AssertFileExists fails the test if the file does not exist.
+func (e *TestEnv) AssertFileExists(path string) {
+	e.t.Helper()
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		e.t.Errorf("Expected file to exist: %s", path)
+	}
+}
+
+// AssertFileNotExists fails the test if the file exists.
+func (e *TestEnv) AssertFileNotExists(path string) {
+	e.t.Helper()
+	if _, err := os.Stat(path); err == nil {
+		e.t.Errorf("Expected file to NOT exist: %s", path)
+	}
+}
