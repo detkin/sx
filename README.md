@@ -10,7 +10,7 @@ tools across your entire team. Think NPM for AI agents -- install once, use ever
 - Expand successful AI use from experts to everyone
 - Spread best practices to any AI tool (coming soon)
 
-## Quickstart
+## Quickstarts
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sleuth-io/sx/main/install.sh | bash
